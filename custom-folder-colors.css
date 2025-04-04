@@ -1,0 +1,24 @@
+/* assistente-app */
+.monaco-list-row[aria-label*="assistente-app"] {
+  background-color: rgba(41, 109, 132, 0.2) !important;
+}
+
+/* assistenteinfra-secret */
+.monaco-list-row[aria-label*="assistenteinfra-secret"] {
+  background-color: rgba(255, 89, 99, 0.2) !important;
+}
+
+/* assistente-infra */
+.monaco-list-row[aria-label*="assistente-infra"] {
+  background-color: rgba(249, 207, 88, 0.2) !important;
+}
+
+/* repositorio-exemplo-1 */
+.monaco-list-row[aria-label*="repositorio-exemplo-1"] {
+  background-color: rgba(244, 156, 36, 0.2) !important;
+}
+
+/* repositorio-exemplo-2 */
+.monaco-list-row[aria-label*="repositorio-exemplo-2"] {
+  background-color: rgba(36, 166, 137, 0.2) !important;
+}
