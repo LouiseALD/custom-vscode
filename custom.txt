@@ -1,1 +1,1014 @@
+download_pdf:
 
+import os
+import requests
+
+def download_specific_pdf(pdf_url, download_folder='downloaded_pdfs', filename=None):
+    """
+    Baixa um PDF específico a partir de uma URL direta.
+    
+    Args:
+        pdf_url (str): URL direta do arquivo PDF
+        download_folder (str): Pasta onde o PDF será salvo
+        filename (str): Nome personalizado para o arquivo (opcional)
+    """
+    # Criar pasta de download se não existir
+    if not os.path.exists(download_folder):
+        os.makedirs(download_folder)
+        print(f"Pasta '{download_folder}' criada com sucesso.")
+    
+    # Definir o nome do arquivo
+    if filename is None:
+        # Extrair o nome do arquivo da URL
+        filename = pdf_url.split('/')[-1]
+    
+    # Caminho completo onde o arquivo será salvo
+    file_path = os.path.join(download_folder, filename)
+    
+    # Fazer download do PDF
+    try:
+        print(f"Baixando PDF de: {pdf_url}")
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(pdf_url, headers=headers)
+        response.raise_for_status()  # Verificar se a resposta foi bem-sucedida
+        
+        # Salvar o PDF localmente
+        with open(file_path, 'wb') as f:
+            f.write(response.content)
+        
+        print(f"Download concluído com sucesso!")
+        print(f"PDF salvo em: {os.path.abspath(file_path)}")
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Erro ao baixar o PDF: {e}")
+
+# URL do PDF específico do IFPR
+pdf_url = "https://ifpr.edu.br/goioere/wp-content/uploads/sites/13/2022/12/Artigo-cientifico-Vitoria.pdf"
+
+# Executar o download
+download_specific_pdf(pdf_url, filename="Artigo-cientifico-Vitoria.pdf")
+
+
+
+
+aws_client.py:
+
+import json
+import logging
+from typing import List, Dict
+import time
+
+def calcular_max_tokens(json_mappings: List[Dict]) -> int:
+    """Calcula o número máximo de tokens baseado nos mapeamentos JSON fornecidos.
+
+    :param json_mappings: Lista de dicionários contendo mapeamentos JSON.
+    :return: Número máximo de tokens calculado.
+    """
+    # Calcula o tamanho aproximado dos mapeamentos
+    json_str = json.dumps(json_mappings)
+    tamanho_bytes = len(json_str.encode('utf-8'))
+    
+    # Estimativa de tokens (aproximadamente 4 caracteres por token)
+    tokens_estimados = tamanho_bytes / 4
+    
+    # Tokens base para o prompt e a resposta
+    base_tokens = 500
+    # Adicionar tokens para o mapeamento
+    dynamic_tokens = tokens_estimados * 1.2  # Margem de segurança de 20%
+    
+    # Limitar a um máximo razoável
+    max_tokens = min(2500, base_tokens + int(dynamic_tokens))
+    
+    print(f"Estimativa de tokens para mapeamentos: {int(tokens_estimados)}")
+    print(f"Total de tokens alocados: {max_tokens}")
+    
+    return max_tokens
+
+def preparar_mapeamentos_para_bedrock(json_mappings: List[Dict]) -> List[Dict]:
+    """
+    Prepara os mapeamentos para envio ao Bedrock, simplificando a estrutura se necessário.
+    
+    :param json_mappings: Lista de dicionários contendo mapeamentos JSON.
+    :return: Lista de mapeamentos preparados para envio.
+    """
+    # Se os mapeamentos estiverem vazios, retornar uma lista vazia
+    if not json_mappings:
+        print("AVISO: Mapeamentos vazios recebidos para preparação")
+        return []
+        
+    mapeamentos_preparados = []
+    
+    # Para cada mapeamento na lista
+    for mapeamento in json_mappings:
+        mapeamento_simplificado = {}
+        
+        # Para cada tabela no mapeamento
+        for tabela, colunas in mapeamento.items():
+            if isinstance(colunas, dict):
+                tabela_info = {}
+                
+                # Para cada coluna nas colunas da tabela
+                for coluna, info in colunas.items():
+                    # Se a informação for um dicionário, extrair os campos relevantes
+                    if isinstance(info, dict):
+                        tabela_info[coluna] = {
+                            "tabela_origem": tabela,
+                            "tabela_destino": info.get("tabela_data_mesh", ""),
+                            "coluna_destino": info.get("campo_data_mesh", ""),
+                            "tipo_dado": info.get("tipo_de_dado", ""),
+                            "tipo": info.get("tipo", "")
+                        }
+                    else:
+                        # Se a informação não for um dicionário, apenas armazenar o valor
+                        tabela_info[coluna] = str(info)
+                        
+                mapeamento_simplificado[tabela] = tabela_info
+            else:
+                # Se as colunas não forem um dicionário, armazenar diretamente
+                mapeamento_simplificado[tabela] = str(colunas)
+                
+        mapeamentos_preparados.append(mapeamento_simplificado)
+        
+    print(f"Mapeamentos preparados: {len(mapeamentos_preparados)} itens")
+    return mapeamentos_preparados
+
+def converter_query_oc3_para_datamesh(bedrock_runtime, query: str, json_mappings: List[Dict]) -> str:
+    """Converte uma query SQL do padrão OC3 para o padrão Datamesh usando os mapeamentos JSON.
+
+    :param query: Query SQL no padrão OC3.
+    :param json_mappings: Lista de dicionários contendo mapeamentos JSON.
+    :return: Query SQL convertida para o padrão Datamesh.
+    """
+    try:
+        # Verifica se há mapeamentos disponíveis
+        if not json_mappings:
+            return "Erro: Não há mapeamentos disponíveis para conversão"
+            
+        # Prepara os mapeamentos para envio ao Bedrock
+        mapeamentos_preparados = preparar_mapeamentos_para_bedrock(json_mappings)
+        
+        if not mapeamentos_preparados:
+            return "Erro: Falha ao preparar mapeamentos para envio ao Bedrock"
+        
+        # Print detalhado dos mapeamentos que serão enviados ao Bedrock
+        print("\n" + "=" * 80)
+        print("MAPEAMENTOS PREPARADOS PARA ENVIO AO BEDROCK:")
+        print("=" * 80)
+        mapeamentos_json = json.dumps(mapeamentos_preparados, indent=2)
+        # Limitar a saída para não sobrecarregar o console
+        if len(mapeamentos_json) > 1000:
+            print(mapeamentos_json[:1000] + "... (truncado)")
+        else:
+            print(mapeamentos_json)
+        print("=" * 80)
+        
+        # Atualiza o payload para usar o novo prompt e a query fornecida
+        prompt = """
+Você é um assistente especializado em conversão de mapeamento fornecido.
+
+INSTRUÇÕES PARA CONVERSÃO DE QUERY SQL:
+
+1. Não altere a lógica da query.
+2. Substitua apenas os nomes das tabelas e colunas conforme o mapeamento fornecido.
+3. A linguagem da query será SQL com o tipo Athena (AWS).
+4. Utilize os mapeamentos da lista de JSON para substituir apenas os nomes de campos e tabelas do OC3 LIGHT(DE) pelos equivalentes em Datamesh.
+5. Não altere a lógica, a estrutura, os alias, os formatos etc.
+6. Mantenha os alias de tabelas (exemplo: AS "A") inalterados.
+7. Se a tabela for do tipo "cadastro", adicione o prefixo "spec_".
+8. Se a tabela for do tipo "hub", adicione o prefixo "hub_".
+9. Se a query SQL convertida não possuir substituição, retorne inalterada.
+10. Se não existir tabela ou coluna no mapeamento, retorne inalterado.
+11. A query deve ser retornada no padrão de Athena.
+12. Se houver diferença de tipos de dados, utilize "CAST" para substituir.
+13. Para cada campo encontrado na query, use o tipo fornecido no mapeamento.
+14. Mantenha os tipos de dados corretos, sem conversão desnecessária.
+15. Ignore campos que já estão no tipo correto.
+16. Lide corretamente com CTEs (WITH clauses) aplicando as mesmas regras aos nomes de tabelas e colunas nas definições de CTE.
+17. Preserve exatamente a mesma estrutura da query, incluindo indentação, quebras de linha e espaços.
+18. Mantenha todas as expressões como MAX(), MIN(), COUNT() intactas, apenas aplicando as conversões necessárias aos nomes de colunas dentro dessas funções.
+
+FORMATO DE SAÍDA:
+1. Retorne APENAS a query SQL convertida, sem explicações adicionais.
+2. Não inclua marcadores de código como ```sql.
+3. A resposta deve começar diretamente com a instrução SQL.
+"""
+
+        # Calcula o max_tokens baseado nos mapeamentos
+        max_tokens = calcular_max_tokens(mapeamentos_preparados)
+
+        payload = {
+            "anthropic_version": "bedrock-2023-05-31",  # Certifique-se de usar a versão correta
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"{prompt}\n\nQuery original (no formato OC3): {query}\n\nJSON Mapeamentos (DE-PARA): {json.dumps(mapeamentos_preparados)}"
+                }
+            ],
+            "max_tokens": max_tokens
+        }
+
+        print("\nEnviando payload para Bedrock com máximo de tokens:", max_tokens)
+        start_time = time.time()
+
+        # Faz a chamada ao modelo
+        response = bedrock_runtime.invoke_model(
+            modelId="anthropic.claude-3-sonnet-20240229-v1-0",  # Certifique-se de usar o ID correto do modelo
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(payload).encode("utf-8")
+        )
+
+        end_time = time.time()
+        response_time = end_time - start_time
+        print(f"Tempo de resposta da API do Bedrock: {response_time:.2f} segundos")
+
+        # Processa a resposta
+        response_body = json.loads(response["body"].read().decode("utf-8"))
+        
+        # Extrair a resposta do modelo
+        if "content" in response_body and isinstance(response_body["content"], list) and len(response_body["content"]) > 0:
+            query_convertida = response_body["content"][0].get("text", "")
+            print("\nResposta bruta do Bedrock:")
+            print("-" * 40)
+            print(query_convertida)
+            print("-" * 40)
+            return query_convertida
+        else:
+            print("Estrutura de resposta inesperada do Bedrock:", response_body)
+            return "Erro: Estrutura de resposta inesperada do Bedrock"
+
+    except Exception as e:
+        import traceback
+        print("Erro ao processar a query no Bedrock:")
+        print(traceback.format_exc())
+        return f"Erro ao processar a query: {str(e)}"
+
+json_loader.py:
+
+import re
+import json
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+def carregar_mapeamentos(pasta_json: str) -> list:
+    """Carrega mapeamentos de arquivos JSON em uma pasta especificada.
+
+    :param pasta_json: Caminho para a pasta contendo arquivos JSON.
+    :return: Lista de dicionários com mapeamentos carregados.
+    """
+    logger.info(f"Tentando carregar mapeamentos da pasta: {pasta_json}")
+    mapeamentos = []
+    
+    if not os.path.exists(pasta_json):
+        print(f"ERRO: Pasta {pasta_json} não encontrada")
+        # Tentar pastas alternativas
+        alternativas = [
+            os.path.join(os.getcwd(), "mapeamentos-de-para"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mapeamentos-de-para"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "mapeamentos-de-para")
+        ]
+        
+        for alt in alternativas:
+            if os.path.exists(alt):
+                print(f"Usando pasta alternativa: {alt}")
+                pasta_json = alt
+                break
+    
+    # Lista todos os arquivos na pasta
+    try:
+        todos_arquivos = os.listdir(pasta_json)
+        print(f"Arquivos encontrados na pasta: {todos_arquivos}")
+        arquivos_json = [f for f in todos_arquivos if f.endswith('.json')]
+        print(f"Arquivos JSON encontrados: {arquivos_json}")
+    except Exception as e:
+        print(f"Erro ao listar arquivos: {e}")
+        return mapeamentos
+
+    for root, _, files in os.walk(pasta_json):
+        for file in files:
+            if file.endswith(".json"):
+                caminho_json = os.path.join(root, file)
+                try:
+                    print(f"Lendo arquivo: {caminho_json}")
+                    with open(caminho_json, "r", encoding="utf-8") as f:
+                        conteudo = f.read()
+                        # Print dos primeiros 100 caracteres para debug
+                        print(f"Primeiros 100 caracteres: {conteudo[:100]}")
+                        dados = json.loads(conteudo)
+                        if isinstance(dados, list):
+                            for item in dados:
+                                if isinstance(item, dict):
+                                    mapeamentos.append(item)
+                            print(f"Carregados {len(dados)} itens do arquivo {file}")
+                        else:
+                            print(f"AVISO: Arquivo {file} não contém uma lista JSON")
+                except Exception as e:
+                    print(f"Erro ao processar o arquivo {caminho_json}: {e}")
+
+    print(f"Total de mapeamentos carregados: {len(mapeamentos)}")
+    return mapeamentos
+
+def extrair_elementos_query(query):
+    """
+    Extrai tabelas e campos de uma query SQL de forma mais robusta,
+    incluindo suporte para CTEs e subconsultas.
+    """
+    # Padronizar query para facilitar a extração
+    query_normalizada = re.sub(r'\s+', ' ', query).upper()
+    
+    # Extrair CTEs
+    cte_pattern = r'WITH\s+(\w+)\s+AS\s*\('
+    ctes = re.findall(cte_pattern, query_normalizada, re.IGNORECASE)
+    
+    # Extrair tabelas da cláusula FROM
+    from_pattern = r'FROM\s+([A-Za-z0-9_\.]+)'
+    tabelas_from = re.findall(from_pattern, query_normalizada, re.IGNORECASE)
+    
+    # Extrair tabelas da cláusula JOIN
+    join_pattern = r'JOIN\s+([A-Za-z0-9_\.]+)'
+    tabelas_join = re.findall(join_pattern, query_normalizada, re.IGNORECASE)
+    
+    # Juntar todas as tabelas
+    todas_tabelas = ctes + tabelas_from + tabelas_join
+    
+    # Remover prefixos de esquema (exemplo: dbo.)
+    tabelas_limpas = []
+    for tabela in todas_tabelas:
+        if '.' in tabela:
+            partes = tabela.split('.')
+            tabelas_limpas.append(partes[-1])
+        else:
+            tabelas_limpas.append(tabela)
+    
+    # Extrair campos
+    # Primeiro, pegar todos os SELECT até o primeiro FROM
+    select_clauses = re.findall(r'SELECT(.*?)FROM', query_normalizada, re.IGNORECASE | re.DOTALL)
+    
+    # Extrair nome dos campos
+    campos = []
+    for clause in select_clauses:
+        # Se contiver "*" adicionar como um campo especial
+        if "*" in clause:
+            campos.append("*")
+            
+        # Extrair campo.coluna
+        campo_coluna = re.findall(r'([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)', clause)
+        for _, col in campo_coluna:
+            campos.append(col)
+            
+        # Extrair campos isolados (sem alias)
+        campos_isolados = re.findall(r'(?:,|\s)([A-Za-z][A-Za-z0-9_]*)', clause)
+        campos.extend(campos_isolados)
+    
+    # Remover duplicatas
+    tabelas_unicas = list(set(tabelas_limpas))
+    campos_unicos = list(set(campos))
+    
+    return {
+        'tabelas': tabelas_unicas,
+        'campos': campos_unicos
+    }
+
+def buscar_por_termos(query, mapeamentos):
+    """
+    Busca por termos da query nos mapeamentos fornecidos.
+    Melhorado para ser mais flexível na correspondência.
+    """
+    # Extrair elementos da query
+    elementos_query = extrair_elementos_query(query)
+    
+    print("\n" + "=" * 50)
+    print(f"QUERY ORIGINAL: {query}")
+    print(f"Tabelas extraídas: {elementos_query['tabelas']}")
+    print(f"Campos extraídos: {elementos_query['campos']}")
+    print(f"Total de mapeamentos: {len(mapeamentos)}")
+
+    resultados = []
+
+    # Iterar sobre todos os mapeamentos
+    for item in mapeamentos:
+        # Verificar correspondência de tabela
+        tabela_oc3 = item.get("TABELA OC3 LIGHT", "").upper()
+        
+        # Correspondência de tabela: verificar se alguma tabela da query corresponde
+        tabela_match = False
+        for tabela_query in elementos_query['tabelas']:
+            # Correspondência direta ou parcial
+            if (tabela_oc3 == tabela_query or 
+                tabela_oc3 in tabela_query or 
+                tabela_query in tabela_oc3 or
+                # Correspondência com parte do nome (após remover prefixos comuns)
+                tabela_oc3.replace("TBOC3_", "") in tabela_query or
+                tabela_query in tabela_oc3.replace("TBOC3_", "")):
+                tabela_match = True
+                break
+
+        # Se não encontrou tabela, continue
+        if not tabela_match:
+            continue
+
+        # Verificar campos
+        campo_oc3 = item.get("CAMPO OC3 LIGHT", "").upper()
+        
+        # Flag para indicar se houve correspondência de campo
+        campo_match = False
+        campos_correspondentes = []
+        
+        for campo_query in elementos_query['campos']:
+            # Normalizar para comparação (remover espaços, converter para maiúsculas)
+            campo_query_norm = campo_query.strip().upper()
+            
+            # Comparações mais flexíveis
+            if (campo_query_norm == campo_oc3 or 
+                campo_oc3 in campo_query_norm or 
+                campo_query_norm in campo_oc3):
+                campo_match = True
+                campos_correspondentes.append(campo_query)
+
+        # Se o campo da query for "*" (select *), consideramos que há correspondência
+        if "*" in elementos_query['campos']:
+            campo_match = True
+            campos_correspondentes.append("*")
+            
+        # Se encontrou campos correspondentes ou o campo é "*", adicionar o item
+        if campo_match or "*" in elementos_query['campos']:
+            novo_item = {
+                "tipo": item.get("tipo", ""),
+                "TABELA OC3 LIGHT": item.get("TABELA OC3 LIGHT", ""),
+                "TABELA DATA MESH": item.get("TABELA DATA MESH", ""),
+                "CAMPO OC3 LIGHT": item.get("CAMPO OC3 LIGHT", ""),
+                "CAMPO DATA MESH FINAL": item.get("CAMPO DATA MESH FINAL", ""),
+                "TIPO DE DADO": item.get("TIPO DE DADO", ""),
+                "campos_match": campos_correspondentes
+            }
+            resultados.append(novo_item)
+            print(f"Item adicionado aos resultados: {item.get('TABELA OC3 LIGHT', '')}.{item.get('CAMPO OC3 LIGHT', '')}")
+
+    # Debug final
+    print(f"\nResultados encontrados: {len(resultados)}")
+    return resultados
+
+def filtrar_jsons(resultados: list) -> list:
+    """Filtra resultados JSON para incluir apenas itens com campos válidos.
+
+    :param resultados: Lista de dicionários a serem filtrados.
+    :return: Lista de dicionários filtrados.
+    """
+    
+    resultados_filtrados = [
+        {
+            "tipo": item.get("tipo"),
+            "TABELA OC3 LIGHT": item.get("TABELA OC3 LIGHT"),
+            "CAMPO OC3 LIGHT": item.get("CAMPO OC3 LIGHT"),
+            "TABELA DATA MESH": item.get("TABELA DATA MESH"),
+            "CAMPO DATA MESH FINAL": item.get("CAMPO DATA MESH FINAL"),
+            "TIPO DE DADO": item.get("TIPO DE DADO")
+        }
+        for item in resultados
+        if item.get("tipo") != "nan"
+        and item.get("TABELA OC3 LIGHT") != "nan"
+        and item.get("CAMPO OC3 LIGHT") != "nan"
+        and item.get("TABELA DATA MESH") != "nan"
+        and item.get("CAMPO DATA MESH FINAL") != "nan"
+        and item.get("TIPO DE DADO") != "nan"
+    ]
+    
+    # Debug - imprimir informações sobre os resultados filtrados
+    print(f"Total de mapeamentos carregados: {len(resultados)}")
+    if resultados_filtrados:
+        print(f"Primeiros 3 mapeamentos: {resultados_filtrados[:3]}")
+    else:
+        print("ATENÇÃO: Nenhum mapeamento filtrado disponível!")
+    
+    return resultados_filtrados 
+
+query_processor.py
+
+import re
+
+def extrair_tabelas_aliases(query):
+    """
+    Extrai tabelas e aliases de uma query SQL, incluindo suporte para CTEs (WITH clauses).
+    Retorna um dicionário onde as chaves são os aliases e os valores são os nomes das tabelas.
+    """
+    # Dicionário para armazenar os pares alias:tabela
+    tabela_alias_dict = {}
+    
+    # 1. Extrair as CTEs (WITH clauses)
+    cte_pattern = r"(\w+)\s+as\s*\(\s*select"
+    cte_matches = re.findall(cte_pattern, query, re.IGNORECASE)
+    
+    # Adicionar as CTEs como tabelas virtuais (o alias é o próprio nome da CTE)
+    for cte_name in cte_matches:
+        tabela_alias_dict[cte_name.lower()] = cte_name.lower()
+    
+    # 2. Capturar tabelas e aliases na cláusula FROM principal e JOINs
+    # Padrão para "FROM tabela [AS] alias" ou "JOIN tabela [AS] alias"
+    table_pattern = r"(?:FROM|JOIN)\s+(\w+(?:\.\w+)?)\s+(?:AS\s+)?(\w+)"
+    table_matches = re.findall(table_pattern, query, re.IGNORECASE)
+    
+    # Processar os matches da cláusula FROM/JOIN
+    for table, alias in table_matches:
+        if alias and table:
+            # Remover prefixos de schema se existirem (como "dbo.")
+            if "." in table:
+                _, table = table.split(".", 1)
+            tabela_alias_dict[alias.lower()] = table.upper()
+    
+    # Imprime para debug
+    print(f"Tabelas e aliases extraídos: {tabela_alias_dict}")
+    
+    return tabela_alias_dict
+
+def extrair_colunas_usadas(query, resultados_filtrados):
+    colunas_usadas = {}
+
+    # Capturar referências de coluna no formato "alias.coluna"
+    matches = re.findall(r"(\w+)\.(\w+)", query)
+    # Converter aliases para lowercase para uniformidade
+    matches = [(a.lower(), b.lower()) for (a, b) in matches]
+
+    for alias, coluna in matches:
+        if alias not in colunas_usadas:
+            colunas_usadas[alias] = set()
+        colunas_usadas[alias].add(coluna)
+
+    # Capturar colunas isoladas (sem alias)
+    # Ignorando palavras-chave SQL comuns
+    colunas_isoladas = re.findall(r"\b(\w+)\b", query)
+    palavras_reservadas = {"SELECT", "FROM", "JOIN", "ON", "WHERE", "ORDER", "BY", "HAVING", "GROUP", 
+                          "CASE", "WHEN", "THEN", "ELSE", "END", "AS", "WITH", "BETWEEN", "AND", "OR",
+                          "NOT", "LIKE", "IN", "EXISTS", "DISTINCT", "UNION", "ALL"}
+
+    for coluna in colunas_isoladas:
+        if coluna.upper() not in palavras_reservadas and not coluna.isdigit():
+            if "sem_alias" not in colunas_usadas:
+                colunas_usadas["sem_alias"] = set()
+            colunas_usadas["sem_alias"].add(coluna.upper())
+
+    # Debug
+    print("Colunas agrupadas por alias:")
+    for alias, cols in colunas_usadas.items():
+        print(f"  {alias}: {cols}")
+        
+    return colunas_usadas
+
+def compactar_json(resultados_filtrados, tabelas_query, colunas_query):
+    """
+    Compacta os resultados filtrados em um formato mais eficiente para processamento.
+    """
+    json_compactado = {}
+    
+    # Obter valores de tabelas de tabelas_query (valores do dicionário)
+    tabelas_query_values = list(tabelas_query.values())
+    
+    # Unir todas as colunas de colunas_query em um único conjunto
+    todas_colunas = set()
+    for cols in colunas_query.values():
+        todas_colunas.update(col.upper() for col in cols)
+    
+    # Debug
+    print(f"Tabelas para busca: {tabelas_query_values}")
+    print(f"Colunas para busca: {todas_colunas}")
+    
+    # Para cada item nos resultados filtrados
+    for item in resultados_filtrados:
+        tipo_registro = item.get("tipo", "")
+        tabela_oc3 = item.get("TABELA OC3 LIGHT", "").upper()
+        tabela_dm = item.get("TABELA DATA MESH", "")
+        coluna_oc3 = item.get("CAMPO OC3 LIGHT", "").lower()
+        coluna_dm = item.get("CAMPO DATA MESH FINAL", "")
+        tipo_dado = item.get("TIPO DE DADO", "")
+        
+        # Verificar se a tabela está presente nas tabelas da query
+        # Usar uma correspondência mais flexível
+        tabela_match = False
+        for tabela_query in tabelas_query_values:
+            if tabela_oc3 in tabela_query or tabela_query in tabela_oc3:
+                tabela_match = True
+                break
+                
+        if tabela_match:
+            if tabela_oc3 not in json_compactado:
+                json_compactado[tabela_oc3] = {}
+                
+            if tabela_dm not in json_compactado[tabela_oc3]:
+                json_compactado[tabela_oc3][tabela_dm] = {}
+                
+            json_compactado[tabela_oc3][tabela_dm][coluna_oc3.lower()] = {
+                "tabela_data_mesh": tabela_dm,
+                "campo_data_mesh": coluna_dm,
+                "tipo_de_dado": tipo_dado,
+                "tipo": tipo_registro
+            }
+    
+    # Debug
+    print(f"JSON compactado gerado para {len(json_compactado)} tabelas")
+    for tabela in json_compactado:
+        print(f"  Tabela {tabela}: {len(json_compactado[tabela])} mapeamentos")
+    
+    return json_compactado
+
+def retorna_selecao_de_tabelas_para_usuario(tabelas_alias_map, colunas_usadas, mapeamento_tabelas_oc3_para_mesh_total):
+    """
+    Retorna uma seleção de tabelas para o usuário com base nos mapeamentos disponíveis.
+    """
+    tabelas_match = {}
+    
+    print("Processando seleção de tabelas para o usuário...")
+    print(f"Tabelas e aliases: {tabelas_alias_map}")
+    print(f"Colunas usadas: {colunas_usadas}")
+    
+    # Para cada alias e tabela_oc3 no mapeamento
+    for alias, tabela_oc3 in tabelas_alias_map.items():
+        tabelas_match[tabela_oc3] = {}
+        
+        # Se o alias existe nas colunas usadas
+        if alias in colunas_usadas:
+            # Para cada coluna do alias
+            for coluna_oc3 in colunas_usadas[alias]:
+                # Verificar se a tabela_oc3 existe no mapeamento_tabelas_oc3_para_mesh_total
+                for tab_oc3 in mapeamento_tabelas_oc3_para_mesh_total:
+                    # Correspondência flexível para tabelas
+                    if tab_oc3.upper() in tabela_oc3.upper() or tabela_oc3.upper() in tab_oc3.upper():
+                        # Verificar se a coluna existe no mapeamento para essa tabela
+                        for tab_dm, campos in mapeamento_tabelas_oc3_para_mesh_total[tab_oc3].items():
+                            for col_oc3, dados in campos.items():
+                                # Correspondência flexível para colunas
+                                if col_oc3.lower() == coluna_oc3.lower() or col_oc3.lower() in coluna_oc3.lower() or coluna_oc3.lower() in col_oc3.lower():
+                                    if coluna_oc3 not in tabelas_match[tabela_oc3]:
+                                        tabelas_match[tabela_oc3][coluna_oc3] = []
+                                    tabelas_match[tabela_oc3][coluna_oc3].append({**dados, "sigla": alias})
+    
+    # Se não houver correspondências, tentar buscar por colunas "sem_alias"
+    if all(len(colunas) == 0 for colunas in tabelas_match.values()) and "sem_alias" in colunas_usadas:
+        print("Tentando buscar correspondências para colunas sem alias...")
+        # Buscar correspondências para colunas sem alias
+        for tabela_oc3 in tabelas_match:
+            for coluna_sem_alias in colunas_usadas["sem_alias"]:
+                for tab_oc3 in mapeamento_tabelas_oc3_para_mesh_total:
+                    if tab_oc3.upper() in tabela_oc3.upper() or tabela_oc3.upper() in tab_oc3.upper():
+                        for tab_dm, campos in mapeamento_tabelas_oc3_para_mesh_total[tab_oc3].items():
+                            for col_oc3, dados in campos.items():
+                                if col_oc3.upper() == coluna_sem_alias or col_oc3.upper() in coluna_sem_alias or coluna_sem_alias in col_oc3.upper():
+                                    if coluna_sem_alias not in tabelas_match[tabela_oc3]:
+                                        tabelas_match[tabela_oc3][coluna_sem_alias] = []
+                                    tabelas_match[tabela_oc3][coluna_sem_alias].append({**dados, "sigla": "sem_alias"})
+    
+    # Verificar se há algum mapeamento disponível
+    mapeamentos_disponiveis = any(len(colunas) > 0 for tabela, colunas in tabelas_match.items())
+    if not mapeamentos_disponiveis:
+        print("ATENÇÃO: Nenhum mapeamento disponível para seleção!")
+        
+        # Tentativa de fallback - usar todos os mapeamentos disponíveis
+        for tabela_oc3 in tabelas_alias_map.values():
+            for tab_oc3 in mapeamento_tabelas_oc3_para_mesh_total:
+                if tab_oc3.upper() in tabela_oc3.upper() or tabela_oc3.upper() in tab_oc3.upper():
+                    tabelas_match[tabela_oc3] = {}
+                    for tab_dm, campos in mapeamento_tabelas_oc3_para_mesh_total[tab_oc3].items():
+                        for col_oc3, dados in campos.items():
+                            if col_oc3 not in tabelas_match[tabela_oc3]:
+                                tabelas_match[tabela_oc3][col_oc3] = []
+                            tabelas_match[tabela_oc3][col_oc3].append({**dados, "sigla": "fallback"})
+        
+        # Verificar novamente se há mapeamentos disponíveis após o fallback
+        mapeamentos_disponiveis = any(len(colunas) > 0 for tabela, colunas in tabelas_match.items())
+        if not mapeamentos_disponiveis:
+            print("FALLBACK: Adicionando todos os mapeamentos disponíveis")
+            # Último recurso: adicionar todas as tabelas e colunas dos mapeamentos
+            for tab_oc3, mapeamento in mapeamento_tabelas_oc3_para_mesh_total.items():
+                tabelas_match[tab_oc3] = {}
+                for tab_dm, campos in mapeamento.items():
+                    for col_oc3, dados in campos.items():
+                        if col_oc3 not in tabelas_match[tab_oc3]:
+                            tabelas_match[tab_oc3][col_oc3] = []
+                        tabelas_match[tab_oc3][col_oc3].append({**dados, "sigla": "fallback_all"})
+    
+    return tabelas_match
+
+def registrar_mapeamento_usuario(tabelas_alias_map, colunas_usadas, mapeamento_tabelas_oc3_para_mesh_filtrado):
+    """
+    Registra o mapeamento selecionado pelo usuário.
+    """
+    tabelas_mapeadas = {}
+    
+    # Debug do objeto mapeamento_tabelas_oc3_para_mesh_filtrado
+    print(f"Tipo de mapeamento_tabelas_oc3_para_mesh_filtrado: {type(mapeamento_tabelas_oc3_para_mesh_filtrado)}")
+    
+    # Se não há tabelas para mapear, retornar dicionário vazio
+    if not mapeamento_tabelas_oc3_para_mesh_filtrado:
+        print("Aviso: Nenhum mapeamento filtrado disponível")
+        return {}  # Retorna um dicionário vazio, não uma lista vazia
+
+    # Para cada tabela e suas colunas no mapeamento
+    for tabela_oc3, colunas in mapeamento_tabelas_oc3_para_mesh_filtrado.items():
+        if colunas:  # Verificar se há colunas para esta tabela
+            tabelas_mapeadas[tabela_oc3] = {}
+            
+            # Para cada coluna e seus mapeamentos
+            for coluna_oc3, mapeamentos in colunas.items():
+                if mapeamentos:  # Verificar se há mapeamentos para esta coluna
+                    # Se houver mais de um mapeamento possível, pedir ao usuário para selecionar
+                    if len(mapeamentos) > 1:
+                        print(f"Mais de 1 correspondência OC3 -> Mesh para tabela {tabela_oc3} - coluna {coluna_oc3}")
+                        for i, mapeamento in enumerate(mapeamentos):
+                            print(f"[{i}]: {mapeamento.get('tabela_data_mesh', 'N/A')} - {mapeamento.get('campo_data_mesh', 'N/A')}")
+                        
+                        # Solicitar seleção do usuário
+                        try:
+                            print("Digite o índice desejado:")
+                            indice = int(input())
+                            if 0 <= indice < len(mapeamentos):
+                                tabelas_mapeadas[tabela_oc3][coluna_oc3] = mapeamentos[indice]
+                            else:
+                                print(f"Índice inválido. Usando o primeiro mapeamento.")
+                                tabelas_mapeadas[tabela_oc3][coluna_oc3] = mapeamentos[0]
+                        except (ValueError, IndexError):
+                            print("Entrada inválida ou índice fora de alcance. Usando o primeiro mapeamento.")
+                            tabelas_mapeadas[tabela_oc3][coluna_oc3] = mapeamentos[0]
+                    else:
+                        # Se houver apenas um mapeamento, use-o automaticamente
+                        tabelas_mapeadas[tabela_oc3][coluna_oc3] = mapeamentos[0]
+                else:
+                    print(f"Sem correspondência OC3 -> Mesh para tabela {tabela_oc3} - coluna {coluna_oc3}")
+                    tabelas_mapeadas[tabela_oc3][coluna_oc3] = {"mensagem": "Sem correspondência"}
+    
+    # Debug do objeto final
+    print(f"Tipo do objeto retornado por registrar_mapeamento_usuario: {type(tabelas_mapeadas)}")
+    print(f"Conteúdo (primeiras chaves): {list(tabelas_mapeadas.keys())[:5] if tabelas_mapeadas else 'vazio'}")
+    
+    return tabelas_mapeadas  # Retorna um dicionário, não uma lista
+
+def processar_query(query, resultados_filtrados):
+    """
+    Processa a query SQL para extrair tabelas, colunas e mapeamentos.
+    """
+    # Extrair tabelas e aliases
+    tabelas_alias_map = extrair_tabelas_aliases(query)
+    
+    # Se não foram encontradas tabelas, tentar abordagem alternativa
+    if not tabelas_alias_map:
+        print("ALERTA: Nenhuma tabela extraída pelo método padrão. Tentando abordagem alternativa...")
+        # Extrair todas as tabelas mencionadas na query
+        tabelas = re.findall(r"(?:FROM|JOIN)\s+(\w+(?:\.\w+)?)", query, re.IGNORECASE)
+        for i, tabela in enumerate(tabelas):
+            # Remover prefixos de schema se existirem
+            if "." in tabela:
+                _, tabela = tabela.split(".", 1)
+            # Usar um alias padrão baseado no índice
+            alias = f"t{i}"
+            tabelas_alias_map[alias] = tabela.upper()
+        
+        print(f"Tabelas extraídas com abordagem alternativa: {tabelas_alias_map}")
+    
+    # Extrair colunas usadas na query
+    colunas_usadas = extrair_colunas_usadas(query, resultados_filtrados)
+    
+    # Compactar os resultados filtrados em um formato mais eficiente
+    json_compactados = compactar_json(resultados_filtrados, tabelas_alias_map, colunas_usadas)
+    
+    # Retornar seleção de tabelas para o usuário
+    mapeamentos_tabelas_oc3_para_mesh_filtrado = retorna_selecao_de_tabelas_para_usuario(
+        tabelas_alias_map, colunas_usadas, json_compactados)
+    
+    # Registrar mapeamento selecionado pelo usuário
+    tabelas_mapeadas_usuario = registrar_mapeamento_usuario(
+        tabelas_alias_map, colunas_usadas, mapeamentos_tabelas_oc3_para_mesh_filtrado)
+    
+    # Validar o formato de retorno
+    if not isinstance(tabelas_mapeadas_usuario, dict):
+        print(f"ERRO: Formato de retorno incorreto. Esperado dict, obtido {type(tabelas_mapeadas_usuario)}")
+        # Forçar retorno como dicionário para evitar erros
+        return {}
+    
+    # Embrulhar o dicionário em uma lista para manter compatibilidade
+    print(f"Retornando mapeamento como dicionário dentro de uma lista")
+    return [tabelas_mapeadas_usuario]  # Retorna como lista contendo um dicionário
+
+query_validator.py
+
+import os
+import sys
+import re
+import sqlparse
+
+# Conjunto de palavras-chave reservadas comuns em SQL
+SQL_RESERVED_KEYWORDS = {
+    "ALL", "ALTER", "AND", "AS", "BETWEEN", "BY", "CASE", "CAST", "CREATE", "CROSS", "DELETE", "DISTINCT", "DROP",
+    "ELSE", "END", "EXISTS", "FALSE", "FOR", "FROM", "FULL", "GROUP", "HAVING", "IN", "INNER", "INSERT", "INTERSECT",
+    "IS", "JOIN", "LEFT", "LIKE", "LIMIT", "NOT", "NULL", "ON", "ORDER", "OUTER", "RIGHT", "SELECT",
+    "SET", "TABLE", "THEN", "TRUE", "UNION", "UPDATE", "USING", "VALUES", "WHERE", "WITH"
+}
+
+def validar_query(query):
+    """Valida uma query SQL de forma genérica."""
+    print("Função validar query chamada")
+
+    # 1. Verificação sintática
+    try:
+        parsed_query = sqlparse.parse(query)
+        if not parsed_query:
+            return {"status": "Erro", "mensagem": "A query está vazia ou mal formatada."}
+    except Exception as e:
+        return {"status": "Erro", "mensagem": f"Erro ao analisar a query: {e}"}
+
+    # 2. Verificar palavras-chave reservadas não escapadas
+    tokens = set(re.findall(r"\b[A-Za-z_]+\b", query.upper()))
+    print("Tokens encontrados:", tokens)
+    invalid_tokens = [token for token in tokens if token in SQL_RESERVED_KEYWORDS and f"`{token}`" not in query]
+    contextually_valid_tokens = {"SELECT", "FROM", "WHERE", "AND", "JOIN", "ON", "AS", "BETWEEN", "GROUP", "BY",
+                                 "WITH", "HAVING", "ORDER", "INNER", "LEFT", "IN"}
+    invalid_tokens = [token for token in invalid_tokens if token not in contextually_valid_tokens]
+    print("Tokens inválidos:", invalid_tokens)
+
+    if invalid_tokens:
+        return {"status": "Erro", "mensagem": f"Palavras-chave reservadas precisam ser escapadas com acentos graves: {invalid_tokens}"}
+
+    # 3. Validar estrutura básica
+    if not re.search(r"SELECT\s", query, re.IGNORECASE):
+        return {"status": "Erro", "mensagem": "Query inválida: falta a cláusula SELECT"}
+    if not re.search(r"FROM\s", query, re.IGNORECASE):
+        return {"status": "Erro", "mensagem": "Query inválida: falta a cláusula FROM"}
+
+    # 4. Validar tabelas e colunas
+    tabelas = re.findall(r"(?:FROM|JOIN)\s+(\S+)", query, re.IGNORECASE)
+    colunas = re.findall(r"SELECT\s+(.*?)\s+FROM", query, re.IGNORECASE | re.DOTALL)
+    print("Tabelas encontradas:", tabelas)
+    print("Colunas encontradas antes do split:", colunas)
+
+    if colunas:
+        # Ajuste para lidar com colunas complexas e funções
+        colunas = [col.strip() for col in re.split(r",\s*(?![^(]*\))", colunas[0]) if col.strip()]
+        print("Colunas encontradas após o split:", colunas)
+
+    if not tabelas:
+        return {"status": "Erro", "mensagem": "Nenhuma tabela encontrada na Query"}
+    if not colunas:
+        return {"status": "Erro", "mensagem": "Nenhuma coluna encontrada na Query"}
+
+    # Se passou por todas as validações
+    return {"status": "Sucesso", "mensagem": "A query é válida"}
+
+def lambda_handler(event, _context):
+    """Função Lambda para processar a query"""
+    query = sys.stdin.read()  # Lê a query da entrada padrão
+    if not query:
+        return {"error": "Nenhuma query informada"}
+
+    resultado_sql = validar_query(query)
+    print(resultado_sql)
+    return resultado_sql
+
+# Chamada da função Lambda
+if __name__ == "__main__":
+    lambda_handler(None, None)
+
+lambda_function.py
+
+import os
+import sys
+import boto3
+import json
+import time
+
+from src.json_loader import carregar_mapeamentos, buscar_por_termos, filtrar_jsons
+from src.query_processor import processar_query
+from src.aws_client import converter_query_oc3_para_datamesh
+from src.query_validator import validar_query
+
+def lambda_handler(event: dict, _context) -> dict:
+    """
+    Processa a query recebida no evento e retorna o resultado convertido.
+
+    :param event: Evento recebido pela função Lambda, deve conter a chave `query`.
+    :param _context: Contexto da execução da Lambda (não utilizado).
+    :return: Dicionário com o resultado da query convertida ou mensagem de erro.
+    """
+    try:
+        # Crie uma sessão boto3 usando as credenciais definidas no ambiente
+        session = boto3.Session(
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            aws_session_token=os.getenv("AWS_SESSION_TOKEN")
+        )
+
+        bedrock_runtime = session.client("bedrock-runtime", region_name="us-east-1")
+        json_folder = os.path.join(os.path.dirname(__file__), "mapeamentos-de-para")
+
+        query = sys.stdin.read()  # ctrl+z to stop reading from input
+
+        if not query:
+            return {"error": "Nenhuma query informada"}
+
+        # Valide a query
+        validacao_resultado = validar_query(query)
+        if validacao_resultado["status"] != "Sucesso":
+            return {"error": validacao_resultado["mensagem"]}
+
+        print(f"Query recebida: {query}")
+        print("Você quer: 1 - Processar a query diretamente, 2 - Selecionar as tabelas do de-para")
+        escolha = input("Selecione 1 ou 2: ").strip()
+
+        start_time = time.time()
+
+        mapeamentos = carregar_mapeamentos(json_folder)
+        resultados = buscar_por_termos(query, mapeamentos)
+        resultados_filtrados = filtrar_jsons(resultados)
+
+        if escolha == "1":
+            # Processa a query diretamente com a primeira alternativa encontrada
+            if resultados_filtrados:
+                mapeamentos_usuario = [resultados_filtrados[0]]  # Usa a primeira alternativa
+            else:
+                return {"error": "Nenhuma tabela de referência encontrada para processar a query diretamente."}
+
+        elif escolha == "2":
+            # Mantém o fluxo atual de seleção de tabelas
+            mapeamentos_usuario = processar_query(query, resultados_filtrados)
+
+        else:
+            return {"error": "Opção inválida. Por favor, selecione 1 ou 2."}
+
+        # Adiciona impressão detalhada dos mapeamentos antes de enviar para o Bedrock
+        print("\n" + "=" * 80)
+        print("MAPEAMENTOS QUE SERÃO ENVIADOS PARA O BEDROCK:")
+        print("=" * 80)
+        
+        # Debug para ver o tipo real dos mapeamentos
+        print(f"Tipo de mapeamentos_usuario: {type(mapeamentos_usuario)}")
+        
+        # Formata e imprime os mapeamentos de forma legível
+        if isinstance(mapeamentos_usuario, list):
+            for i, mapeamento in enumerate(mapeamentos_usuario):
+                print(f"\nMAPEAMENTO #{i+1}:")
+                
+                # Verificar se mapeamento é um dicionário
+                if isinstance(mapeamento, dict):
+                    for tabela, colunas in mapeamento.items():
+                        print(f"  Tabela OC3: {tabela}")
+                        
+                        # Verificar se colunas é um dicionário
+                        if isinstance(colunas, dict):
+                            for coluna, info in colunas.items():
+                                if isinstance(info, dict):
+                                    print(f"    Coluna: {coluna}")
+                                    print(f"      → Tabela DataMesh: {info.get('tabela_data_mesh', 'N/A')}")
+                                    print(f"      → Campo DataMesh: {info.get('campo_data_mesh', 'N/A')}")
+                                    print(f"      → Tipo de Dado: {info.get('tipo_de_dado', 'N/A')}")
+                                    print(f"      → Tipo: {info.get('tipo', 'N/A')}")
+                                else:
+                                    print(f"    Coluna: {coluna} → {info}")
+                        else:
+                            print(f"    Colunas (não é um dicionário): {colunas}")
+                else:
+                    print(f"  Mapeamento (não é um dicionário): {mapeamento}")
+        else:
+            print(f"  mapeamentos_usuario não é uma lista: {mapeamentos_usuario}")
+        
+        print("\nTotal de mapeamentos: {0}".format(len(mapeamentos_usuario) if isinstance(mapeamentos_usuario, list) else 0))
+        print("=" * 80)
+        
+        # Verificação de segurança para evitar envio vazio
+        if not mapeamentos_usuario:
+            print("AVISO: Nenhum mapeamento foi gerado. O Bedrock não será chamado.")
+            return {"error": "Nenhum mapeamento disponível para conversão."}
+            
+        # Transforma mapeamentos para formato JSON para impressão
+        print("\nJSON DE MAPEAMENTOS (versão simplificada):")
+        try:
+            json_simplificado = json.dumps(mapeamentos_usuario, indent=2)
+            # Limita o tamanho da impressão para não sobrecarregar o console
+            max_chars = 2000
+            if len(json_simplificado) > max_chars:
+                print(json_simplificado[:max_chars] + "... (truncado)")
+            else:
+                print(json_simplificado)
+        except Exception as e:
+            print(f"Erro ao serializar mapeamentos para JSON: {str(e)}")
+        
+        print("\nEnviando para o Bedrock para conversão...\n")
+
+        resultado = converter_query_oc3_para_datamesh(bedrock_runtime, query, mapeamentos_usuario)
+
+        end_time = time.time()
+        total_time = end_time - start_time
+        print(f"Tempo total de execução: {total_time:.2f} segundos")
+
+        print("Query convertida:", resultado)
+        return resultado
+
+    except Exception as e:
+        import traceback
+        print(f"Erro interno ao processar a query: {str(e)}")
+        print(traceback.format_exc())
+        return {"error": f"Erro interno ao processar a query: {str(e)}"}
+
+if __name__ == "__main__":
+    query_convertida = lambda_handler(None, None)
+    print(query_convertida)
