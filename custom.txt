@@ -1,1 +1,112 @@
 
+def carregar_mapeamentos(self, pasta_json=None):
+    """
+    Carrega mapeamentos de arquivos JSON em uma pasta especificada.
+    
+    Args:
+        pasta_json: Caminho para a pasta contendo arquivos JSON (opcional)
+        
+    Returns:
+        Lista de mapeamentos carregados
+    """
+    # Se não especificado, tentar descobrir o caminho automaticamente
+    if pasta_json is None:
+        pasta_json = self.descobrir_caminho_mapeamentos()
+    
+    logger.info(f"Tentando carregar mapeamentos de: {pasta_json}")
+    mapeamentos = []
+
+    # Verificar se o caminho foi encontrado
+    if pasta_json and os.path.exists(pasta_json):
+        # Busca recursiva por arquivos JSON
+        for root, _, files in os.walk(pasta_json):
+            for file in files:
+                if file.endswith(".json"):
+                    caminho_json = os.path.join(root, file)
+                    logger.info(f"Processando arquivo JSON: {caminho_json}")
+                    try:
+                        with open(caminho_json, "r", encoding="utf-8") as f:
+                            dados = json.load(f)
+                            if isinstance(dados, list):
+                                logger.info(f"Arquivo {file} contém uma lista com {len(dados)} itens")
+                                for item in dados:
+                                    if isinstance(item, dict):
+                                        mapeamentos.append(item)
+                            elif isinstance(dados, dict) and "tabelas" in dados:
+                                logger.info(f"Arquivo {file} contém um dicionário com chave 'tabelas'")
+                                for item in dados.get("tabelas", []):
+                                    if isinstance(item, dict):
+                                        mapeamentos.append(item)
+                            else:
+                                logger.warning(f"Formato de dados não suportado em {file}: {type(dados)}")
+                    except Exception as e:
+                        logger.error(f"Erro ao processar o arquivo {caminho_json}: {e}")
+    else:
+        logger.error(f"Caminho não encontrado: {pasta_json}")
+
+    # Registrar o total de mapeamentos carregados
+    self.mapeamentos = mapeamentos
+    logger.info(f"Total de mapeamentos carregados: {len(mapeamentos)}")
+    return mapeamentos
+
+
+
+==================
+
+
+# Em app.py, antes de chamar inicializar_estado ou show_ui
+
+def corrigir_mapping_utils():
+    """Injeta a implementação correta na classe MappingManager."""
+    from chatbot.mapping_utils import MappingManager
+    
+    # Substituir o método carregar_mapeamentos
+    def carregar_mapeamentos_corrigido(self, pasta_json=None):
+        """Versão corrigida com busca recursiva."""
+        if pasta_json is None:
+            pasta_json = self.descobrir_caminho_mapeamentos()
+        
+        logger.info(f"Tentando carregar mapeamentos de: {pasta_json}")
+        mapeamentos = []
+
+        if pasta_json and os.path.exists(pasta_json):
+            for root, _, files in os.walk(pasta_json):
+                for file in files:
+                    if file.endswith(".json"):
+                        caminho_json = os.path.join(root, file)
+                        logger.info(f"Processando arquivo JSON: {caminho_json}")
+                        try:
+                            with open(caminho_json, "r", encoding="utf-8") as f:
+                                dados = json.load(f)
+                                if isinstance(dados, list):
+                                    for item in dados:
+                                        if isinstance(item, dict):
+                                            mapeamentos.append(item)
+                                elif isinstance(dados, dict) and "tabelas" in dados:
+                                    for item in dados.get("tabelas", []):
+                                        if isinstance(item, dict):
+                                            mapeamentos.append(item)
+                        except Exception as e:
+                            logger.error(f"Erro ao processar arquivo: {e}")
+        else:
+            logger.error(f"Caminho não encontrado: {pasta_json}")
+
+        self.mapeamentos = mapeamentos
+        logger.info(f"Total de mapeamentos carregados: {len(mapeamentos)}")
+        return mapeamentos
+    
+    # Substituir o método na classe
+    MappingManager.carregar_mapeamentos = carregar_mapeamentos_corrigido
+    logger.info("Método carregar_mapeamentos substituído com sucesso")
+
+# Chamar a função de correção antes de inicializar a aplicação
+try:
+    # Injetar a implementação corrigida
+    corrigir_mapping_utils()
+    
+    # Diagnóstico inicial do ambiente
+    diagnosticar_ambiente()
+    
+    # ... resto do código ...
+
+
