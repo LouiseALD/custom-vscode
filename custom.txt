@@ -1,1 +1,1619 @@
 
+import os
+import json
+import subprocess
+import platform
+from pathlib import Path
+
+# Lista de extensões que serão instaladas
+extensions = [
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint",
+    "eamodio.gitlens",
+    "pkief.material-icon-theme",
+    "ms-python.python",
+    "ms-toolsai.jupyter",
+    "ritwickdey.LiveServer"
+]
+
+# Função para instalar extensões
+def install_extensions():
+    print("🔧 Instalando extensões...")
+    for ext in extensions:
+        try:
+            subprocess.run(["code", "--install-extension", ext, "--force"], check=True)
+            print(f"✅ {ext} instalada com sucesso.")
+        except subprocess.CalledProcessError:
+            print(f"❌ Falha ao instalar {ext}.")
+
+# Função para encontrar o caminho do settings.json
+def get_settings_path():
+    system = platform.system()
+    if system == "Windows":
+        base = os.getenv("APPDATA")
+        return Path(base) / "Code" / "User" / "settings.json"
+    elif system == "Darwin":  # macOS
+        return Path.home() / "Library" / "Application Support" / "Code" / "User" / "settings.json"
+    else:  # Linux
+        return Path.home() / ".config" / "Code" / "User" / "settings.json"
+
+# Função para atualizar settings.json
+def update_settings():
+    settings_path = get_settings_path()
+    settings = {}
+
+    if settings_path.exists():
+        with open(settings_path, "r", encoding="utf-8") as f:
+            try:
+                settings = json.load(f)
+            except json.JSONDecodeError:
+                print("⚠️ Arquivo settings.json está corrompido ou vazio. Um novo será criado.")
+
+    new_settings = {
+        "editor.fontSize": 14,
+        "editor.tabSize": 2,
+        "editor.formatOnSave": True,
+        "workbench.iconTheme": "material-icon-theme",
+        "workbench.colorTheme": "Default Dark+",
+        "files.autoSave": "afterDelay",
+        "editor.minimap.enabled": True,
+        "terminal.integrated.fontSize": 13
+    }
+
+    settings.update(new_settings)
+
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+        print(f"✅ settings.json atualizado com sucesso em {settings_path}")
+
+# Execução
+if __name__ == "__main__":
+    print("🎨 Iniciando personalização do VSCode...")
+    install_extensions()
+    update_settings()
+    print("✨ Tudo pronto!")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+s3_manager
+
+# s3_manager.py
+import boto3
+import json
+import os
+import tempfile
+from io import BytesIO
+from typing import Dict, List, Any, Optional
+from logger_config import setup_logger
+
+# Removi a importação circular aqui
+# from mapping_utils import MappingManager
+
+logger = setup_logger()
+
+# Tente importar as configurações, se não existirem, use padrões
+try:
+    from config import S3_CONFIG
+except ImportError:
+    logger.warning("Arquivo config.py não encontrado. Usando configurações padrão.")
+    S3_CONFIG = {
+        "BUCKET_NAME": "seu-bucket-de-mapeamentos",
+        "REGION_NAME": "us-east-1",
+        "PREFIX_OC3_DATAMESH": "mapeamentos-oc3-datamesh/",
+        "PREFIX_SAC_OC3": "mapeamentos-sac-oc3/",
+        "USAR_S3": True
+    }
+
+class S3Manager:
+    """Classe para gerenciar operações com o Amazon S3."""
+    
+    def __init__(self, bucket_name: str = None, region_name: str = None):
+        """
+        Inicializa o gerenciador S3.
+        
+        Args:
+            bucket_name: Nome do bucket S3 (opcional, padrão definido em config.py)
+            region_name: Região da AWS (opcional, padrão definido em config.py)
+        """
+        self.bucket_name = bucket_name or S3_CONFIG.get("BUCKET_NAME", "seu-bucket-de-mapeamentos")
+        self.region_name = region_name or S3_CONFIG.get("REGION_NAME", "us-east-1")
+        
+        try:
+            # Configurar o cliente S3 usando boto3
+            self.s3_client = boto3.client(
+                's3',
+                region_name=self.region_name,
+                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+                aws_session_token=os.getenv("AWS_SESSION_TOKEN")
+            )
+            self.is_available = True
+            logger.info(f"Cliente S3 inicializado com sucesso para o bucket: {self.bucket_name}")
+        except Exception as e:
+            logger.error(f"Não foi possível configurar o cliente S3: {e}")
+            self.is_available = False
+    
+    def listar_objetos(self, prefix: str = "") -> List[str]:
+        """
+        Lista objetos em um bucket com um prefixo específico.
+        
+        Args:
+            prefix: Prefixo para filtrar objetos (padrão: "")
+            
+        Returns:
+            Lista de chaves dos objetos
+        """
+        if not self.is_available:
+            logger.warning("Cliente S3 não disponível. Retornando lista vazia.")
+            return []
+        
+        try:
+            # Listar objetos no bucket com o prefixo especificado
+            response = self.s3_client.list_objects_v2(
+                Bucket=self.bucket_name,
+                Prefix=prefix
+            )
+            
+            # Extrair chaves dos objetos
+            objetos = []
+            if 'Contents' in response:
+                for objeto in response['Contents']:
+                    objetos.append(objeto['Key'])
+            
+            logger.info(f"Listados {len(objetos)} objetos com prefixo '{prefix}'")
+            return objetos
+        except Exception as e:
+            logger.error(f"Erro ao listar objetos no bucket {self.bucket_name}: {e}")
+            return []
+    
+    def carregar_json(self, key: str) -> Optional[Any]:
+        """
+        Carrega um arquivo JSON do S3.
+        
+        Args:
+            key: Chave do objeto no S3
+            
+        Returns:
+            Conteúdo do arquivo JSON ou None em caso de erro
+        """
+        if not self.is_available:
+            logger.warning("Cliente S3 não disponível. Retornando None.")
+            return None
+        
+        try:
+            # Obter o objeto do S3
+            response = self.s3_client.get_object(
+                Bucket=self.bucket_name,
+                Key=key
+            )
+            
+            # Ler o conteúdo do objeto
+            content = response['Body'].read().decode('utf-8')
+            
+            # Converter para JSON
+            data = json.loads(content)
+            
+            logger.info(f"Arquivo JSON carregado com sucesso: {key}")
+            return data
+        except Exception as e:
+            logger.error(f"Erro ao carregar arquivo JSON {key} do bucket {self.bucket_name}: {e}")
+            return None
+    
+    def carregar_mapeamentos(self, prefix: str) -> List[Dict]:
+        """
+        Carrega todos os mapeamentos JSON de um diretório no S3.
+        
+        Args:
+            prefix: Prefixo (pasta) no S3 com os mapeamentos
+            
+        Returns:
+            Lista de mapeamentos carregados
+        """
+        mapeamentos = []
+        
+        # Listar arquivos JSON no prefixo especificado
+        arquivos_json = [key for key in self.listar_objetos(prefix) if key.endswith('.json')]
+        
+        logger.info(f"Encontrados {len(arquivos_json)} arquivos JSON no prefixo '{prefix}'")
+        
+        # Carregar cada arquivo JSON
+        for arquivo in arquivos_json:
+            try:
+                dados = self.carregar_json(arquivo)
+                
+                if isinstance(dados, list):
+                    # Se for uma lista de mapeamentos, adicionar cada item
+                    for item in dados:
+                        if isinstance(item, dict):
+                            mapeamentos.append(item)
+                elif isinstance(dados, dict) and "tabelas" in dados:
+                    # Se for um dicionário com chave "tabelas", adicionar cada item
+                    for item in dados["tabelas"]:
+                        if isinstance(item, dict):
+                            mapeamentos.append(item)
+            except Exception as e:
+                logger.error(f"Erro ao processar arquivo JSON {arquivo}: {e}")
+        
+        logger.info(f"Total de mapeamentos carregados: {len(mapeamentos)}")
+        return mapeamentos
+
+# Função auxiliar para verificar status da conexão com S3
+def verificar_s3_disponivel(bucket_name: str = None) -> bool:
+    """
+    Verifica se a integração com S3 está disponível.
+    
+    Args:
+        bucket_name: Nome do bucket S3 (opcional, padrão definido em config.py)
+        
+    Returns:
+        Booleano indicando se a integração está disponível
+    """
+    try:
+        if not S3_CONFIG.get("USAR_S3", True):
+            logger.info("Uso do S3 desabilitado nas configurações.")
+            return False
+            
+        s3_manager = S3Manager(bucket_name)
+        return s3_manager.is_available
+    except Exception as e:
+        logger.error(f"Erro ao verificar disponibilidade do S3: {e}")
+        return False
+
+
+=====================================================================================
+
+state_manager.py
+
+# state_manager.py
+import os
+import json
+import streamlit as st
+# Importar do mesmo diretório usando importação relativa
+from .mapping_utils import MappingManager
+from logger_config import setup_logger
+
+logger = setup_logger()
+
+# Tente importar as configurações, se não existirem, use padrões
+try:
+    from config import S3_CONFIG, PATH_CONFIG
+except ImportError:
+    logger.warning("Arquivo config.py não encontrado. Usando configurações padrão.")
+    S3_CONFIG = {
+        "BUCKET_NAME": "seu-bucket-de-mapeamentos",
+        "REGION_NAME": "us-east-1",
+        "PREFIX_OC3_DATAMESH": "mapeamentos-oc3-datamesh/",
+        "PREFIX_SAC_OC3": "mapeamentos-sac-oc3/",
+        "USAR_S3": False
+    }
+    PATH_CONFIG = {
+        "MAPEAMENTOS_BASE": "mapeamentos-de-para",
+        "MAPEAMENTOS_OC3_DATAMESH": "mapeamentos-de-para/mapeamentos-oc3-datamesh",
+        "MAPEAMENTOS_SAC_OC3": "mapeamentos-de-para/mapeamentos-sac-oc3"
+    }
+
+# Importar verificador S3 apenas quando necessário para evitar importação circular
+def verificar_s3_disponivel():
+    """Verifica se o S3 está disponível usando a função de s3_manager."""
+    try:
+        from s3_manager import verificar_s3_disponivel as s3_check
+        return s3_check(S3_CONFIG.get("BUCKET_NAME"))
+    except ImportError:
+        logger.warning("Módulo s3_manager não encontrado. S3 não será usado.")
+        return False
+
+def inicializar_estado():
+    """Inicializa o estado da sessão Streamlit."""
+    # Inicializar estado da interface do chat
+    if "mensagens" not in st.session_state:
+        st.session_state["mensagens"] = []
+    if "aguardando_selecao" not in st.session_state:
+        st.session_state["aguardando_selecao"] = False
+    if "mostrar_selecao" not in st.session_state:
+        st.session_state["mostrar_selecao"] = False
+    if "esperando_resultado" not in st.session_state:
+        st.session_state["esperando_resultado"] = False
+    if "ultima_query" not in st.session_state:
+        st.session_state["ultima_query"] = ""
+    if "resultado_query" not in st.session_state:
+        st.session_state["resultado_query"] = None
+    if "tabelas_utilizadas" not in st.session_state:
+        st.session_state["tabelas_utilizadas"] = []
+    if "tipo_processamento" not in st.session_state:
+        st.session_state["tipo_processamento"] = ""
+    if "resultados_filtrados" not in st.session_state:
+        st.session_state["resultados_filtrados"] = []
+    if "tipo_conversao" not in st.session_state:
+        st.session_state["tipo_conversao"] = "OC3_PARA_DATAMESH"  # Valor padrão
+    if "usar_s3" not in st.session_state:
+        # Verificar se S3 está disponível
+        s3_disponivel = verificar_s3_disponivel()
+        st.session_state["usar_s3"] = s3_disponivel
+        if s3_disponivel:
+            logger.info("Usando S3 para carregar mapeamentos")
+        else:
+            logger.info("S3 não disponível. Usando sistema de arquivos local")
+    
+    # Carregar mapeamentos
+    _carregar_mapeamentos()
+
+def _carregar_mapeamentos():
+    """Carrega os mapeamentos para os diferentes tipos de conversão."""
+    # Determinar se devemos usar S3 ou sistema de arquivos local
+    usar_s3 = st.session_state.get("usar_s3", False)
+    
+    # Caminho base do projeto (usado apenas se não estiver usando S3)
+    base_path = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+    
+    # Inicializar gerenciadores de mapeamentos
+    if "mapping_manager_oc3_datamesh" not in st.session_state:
+        logger.info("Inicializando gerenciador de mapeamentos OC3-DataMesh")
+        
+        if usar_s3:
+            # Usar S3 para carregar mapeamentos OC3-DataMesh
+            manager = MappingManager(
+                tipo_conversao="OC3_PARA_DATAMESH",
+                usar_s3=True,
+                bucket_name=S3_CONFIG.get("BUCKET_NAME")
+            )
+            # Prefixo S3 para mapeamentos OC3-DataMesh
+            mapeamentos = manager.carregar_mapeamentos(S3_CONFIG.get("PREFIX_OC3_DATAMESH"))
+        else:
+            # Caminho específico para mapeamentos OC3-DataMesh (sistema de arquivos local)
+            caminho_mapeamentos = os.path.join(base_path, PATH_CONFIG.get("MAPEAMENTOS_OC3_DATAMESH"))
+            
+            # Verificação explícita de existência
+            if not os.path.exists(caminho_mapeamentos):
+                logger.error(f"Pasta de mapeamentos não encontrada: {caminho_mapeamentos}")
+                # Em vez de lançar exceção, criar o diretório
+                try:
+                    os.makedirs(caminho_mapeamentos, exist_ok=True)
+                    logger.info(f"Diretório criado: {caminho_mapeamentos}")
+                except Exception as e:
+                    logger.error(f"Não foi possível criar diretório: {e}")
+            
+            # Criar e armazenar o gerenciador
+            manager = MappingManager(tipo_conversao="OC3_PARA_DATAMESH", usar_s3=False)
+            mapeamentos = manager.carregar_mapeamentos(caminho_mapeamentos)
+        
+        if not mapeamentos:
+            logger.warning("Nenhum mapeamento OC3-DataMesh encontrado")
+            mapeamentos = []  # Garantir que seja uma lista vazia em vez de None
+        
+        st.session_state["mapping_manager_oc3_datamesh"] = manager
+        st.session_state["mapeamentos_oc3_datamesh"] = mapeamentos
+    
+    if "mapping_manager_sac_oc3" not in st.session_state:
+        logger.info("Inicializando gerenciador de mapeamentos SAC-OC3")
+        
+        if usar_s3:
+            # Usar S3 para carregar mapeamentos SAC-OC3
+            manager = MappingManager(
+                tipo_conversao="SAC_PARA_OC3",
+                usar_s3=True,
+                bucket_name=S3_CONFIG.get("BUCKET_NAME")
+            )
+            # Prefixo S3 para mapeamentos SAC-OC3
+            mapeamentos = manager.carregar_mapeamentos(S3_CONFIG.get("PREFIX_SAC_OC3"))
+        else:
+            # Caminho específico para mapeamentos SAC-OC3 (sistema de arquivos local)
+            caminho_mapeamentos = os.path.join(base_path, PATH_CONFIG.get("MAPEAMENTOS_SAC_OC3"))
+            
+            # Verificação explícita de existência
+            if not os.path.exists(caminho_mapeamentos):
+                logger.error(f"Pasta de mapeamentos SAC-OC3 não encontrada: {caminho_mapeamentos}")
+                # Em vez de lançar exceção, criar o diretório
+                try:
+                    os.makedirs(caminho_mapeamentos, exist_ok=True)
+                    logger.info(f"Diretório criado: {caminho_mapeamentos}")
+                except Exception as e:
+                    logger.error(f"Não foi possível criar diretório: {e}")
+            
+            # Criar e armazenar o gerenciador
+            manager = MappingManager(tipo_conversao="SAC_PARA_OC3", usar_s3=False)
+            mapeamentos = manager.carregar_mapeamentos(caminho_mapeamentos)
+        
+        if not mapeamentos:
+            logger.warning("Nenhum mapeamento SAC-OC3 encontrado")
+            mapeamentos = []  # Garantir que seja uma lista vazia em vez de None
+        
+        st.session_state["mapping_manager_sac_oc3"] = manager
+        st.session_state["mapeamentos_sac_oc3"] = mapeamentos
+    
+    # Compatibilidade com código existente - usar os mapeamentos do tipo atual
+    tipo_conversao = st.session_state.get("tipo_conversao", "OC3_PARA_DATAMESH")
+    if tipo_conversao == "OC3_PARA_DATAMESH":
+        st.session_state["mapeamentos"] = st.session_state["mapeamentos_oc3_datamesh"]
+        st.session_state["mapping_manager"] = st.session_state["mapping_manager_oc3_datamesh"]
+    else:  # SAC_PARA_OC3
+        st.session_state["mapeamentos"] = st.session_state["mapeamentos_sac_oc3"]
+        st.session_state["mapping_manager"] = st.session_state["mapping_manager_sac_oc3"]
+
+def adicionar_mensagem(role, texto, is_result=False, is_html=False):
+    """
+    Adiciona mensagem ao histórico de chat.
+    
+    Args:
+        role: Papel da mensagem ('user' ou 'assistant')
+        texto: Texto da mensagem
+        is_result: Flag para indicar se é um resultado
+        is_html: Flag para indicar se o conteúdo pode conter HTML
+    """
+    # Limpar HTML indesejado, exceto quando explicitamente permitido
+    if not is_html:
+        texto = texto.replace('</div>', '').replace('<div>', '').strip()
+    
+    if "mensagens" not in st.session_state:
+        st.session_state["mensagens"] = []
+    
+    # Preparar o dicionário de mensagem
+    mensagem = {
+        "role": role,
+        "text": texto,
+        "is_result": is_result
+    }
+    
+    # Adicionar is_html apenas se for True
+    if is_html:
+        mensagem["is_html"] = is_html
+    
+    st.session_state["mensagens"].append(mensagem)
+
+def adicionar_mensagens_multiplas(mensagens):
+    """
+    Adiciona múltiplas mensagens sequencialmente ao histórico do chat.
+    
+    Args:
+        mensagens: Lista de mensagens a serem adicionadas
+    """
+    for mensagem in mensagens:
+        adicionar_mensagem("assistant", mensagem)
+
+def limpar_historico():
+    """Limpa o histórico de mensagens."""
+    st.session_state["mensagens"] = []
+
+def limpar_resultado():
+    """Limpa o resultado de uma consulta anterior."""
+    st.session_state["resultado_query"] = None
+    st.session_state["tabelas_utilizadas"] = []
+
+def atualizar_tipo_conversao(tipo_conversao):
+    """
+    Atualiza o tipo de conversão atual.
+    
+    Args:
+        tipo_conversao: Novo tipo de conversão
+    """
+    if tipo_conversao != st.session_state.get("tipo_conversao"):
+        st.session_state["tipo_conversao"] = tipo_conversao
+        
+        # Atualizar mapeamentos ativos
+        if tipo_conversao == "OC3_PARA_DATAMESH":
+            st.session_state["mapeamentos"] = st.session_state["mapeamentos_oc3_datamesh"]
+            st.session_state["mapping_manager"] = st.session_state["mapping_manager_oc3_datamesh"]
+        else:  # SAC_PARA_OC3
+            st.session_state["mapeamentos"] = st.session_state["mapeamentos_sac_oc3"]
+            st.session_state["mapping_manager"] = st.session_state["mapping_manager_sac_oc3"]
+
+
+=========================================================================================================
+
+mapping_utils.py
+
+# mapping_utils.py
+import os
+import json
+import re
+from logger_config import setup_logger
+from s3_manager import S3Manager  # Importar o gerenciador S3
+from config import S3_CONFIG  # Importar configurações do S3
+
+logger = setup_logger()
+
+class MappingManager:
+    """Classe centralizada para gerenciar mapeamentos entre sistemas."""
+    
+    def __init__(self, tipo_conversao="OC3_PARA_DATAMESH", usar_s3=None, bucket_name=None):
+        """
+        Inicializa o gerenciador de mapeamentos.
+        
+        Args:
+            tipo_conversao: Tipo de conversão ('OC3_PARA_DATAMESH' ou 'SAC_PARA_OC3')
+            usar_s3: Flag para indicar se deve usar S3 ou sistema de arquivos local
+            bucket_name: Nome do bucket S3 para carregar mapeamentos
+        """
+        self.tipo_conversao = tipo_conversao
+        self.mapeamentos = []
+        self.usar_s3 = S3_CONFIG["USAR_S3"] if usar_s3 is None else usar_s3
+        self.bucket_name = bucket_name or S3_CONFIG["BUCKET_NAME"]
+        
+        # Inicializar o gerenciador S3 se necessário
+        if self.usar_s3:
+            self.s3_manager = S3Manager(self.bucket_name)
+            # Se S3 não estiver disponível, fallback para sistema de arquivos local
+            if not self.s3_manager.is_available:
+                logger.warning("S3 não disponível. Usando sistema de arquivos local como fallback.")
+                self.usar_s3 = False
+        
+    def carregar_mapeamentos(self, pasta_json_ou_prefix):
+        """
+        Carrega mapeamentos de arquivos JSON do S3 ou sistema de arquivos local.
+        
+        Args:
+            pasta_json_ou_prefix: Caminho local ou prefixo S3 contendo arquivos JSON
+            
+        Returns:
+            Lista de mapeamentos carregados
+        """
+        logger.info(f"Carregando mapeamentos de: {pasta_json_ou_prefix} (usando S3: {self.usar_s3})")
+        mapeamentos = []
+        
+        try:
+            if self.usar_s3:
+                # Carregar mapeamentos do S3
+                mapeamentos = self.s3_manager.carregar_mapeamentos(pasta_json_ou_prefix)
+            else:
+                # Carregar mapeamentos do sistema de arquivos local (código original)
+                if not os.path.exists(pasta_json_ou_prefix):
+                    logger.warning(f"Pasta não encontrada: {pasta_json_ou_prefix}")
+                    return mapeamentos
+                    
+                for root, _, files in os.walk(pasta_json_ou_prefix):
+                    for file in files:
+                        if file.endswith(".json"):
+                            caminho_json = os.path.join(root, file)
+                            try:
+                                with open(caminho_json, "r", encoding="utf-8") as f:
+                                    dados = json.load(f)
+                                    if isinstance(dados, list):
+                                        for item in dados:
+                                            if isinstance(item, dict):
+                                                mapeamentos.append(item)
+                                    elif isinstance(dados, dict) and "tabelas" in dados:
+                                        # Suporte para formato de dicionário com chave "tabelas"
+                                        mapeamentos.extend(dados.get("tabelas", []))
+                            except Exception as e:
+                                logger.error(f"Erro ao processar o arquivo {caminho_json}: {e}")
+        except Exception as e:
+            logger.error(f"Erro ao carregar mapeamentos: {e}")
+
+        self.mapeamentos = mapeamentos
+        logger.info(f"Total de mapeamentos carregados: {len(mapeamentos)}")
+        return mapeamentos
+    
+    def buscar_por_termos(self, query, elementos_query=None):
+        """
+        Busca mapeamentos com base nos termos da query.
+        
+        Args:
+            query: Query SQL a ser processada
+            elementos_query: Elementos já extraídos da query (opcional)
+            
+        Returns:
+            Lista de mapeamentos correspondentes
+        """
+        # Importar aqui para evitar importação circular
+        from .sql_utils import extrair_elementos_query
+        
+        # Se não fornecido, extrair elementos da query
+        if elementos_query is None:
+            elementos_query = extrair_elementos_query(query)
+            
+        tabelas_query = elementos_query["tabelas"]
+        campos_query = elementos_query["campos"]
+        
+        logger.info(f"Buscando por: Tabelas={tabelas_query}, Campos={campos_query}")
+        
+        resultados = []
+        
+        # Determinar os campos de busca com base no tipo de conversão
+        if self.tipo_conversao == "OC3_PARA_DATAMESH":
+            campo_tabela_origem = "TABELA OC3 LIGHT"
+            campo_campo_origem = "CAMPO OC3 LIGHT"
+        else:  # SAC_PARA_OC3
+            campo_tabela_origem = "TABELA SAC"
+            campo_campo_origem = "CAMPO SAC"
+        
+        # Iterar sobre todos os mapeamentos
+        for item in self.mapeamentos:
+            # Verificar correspondência de tabela
+            tabela_origem = item.get(campo_tabela_origem, "").upper()
+            tabela_match = any(
+                tabela_origem == tabela_query or 
+                tabela_origem in tabela_query or 
+                tabela_query in tabela_origem
+                for tabela_query in tabelas_query
+            )
+
+            # Se não encontrou tabela, continue
+            if not tabela_match:
+                continue
+
+            # Verificar campos
+            campos_match = []
+            for campo_query in campos_query:
+                # Lista de possíveis campos relacionados
+                campo_origem = item.get(campo_campo_origem, "").upper()
+                possiveis_campos = [
+                    campo_origem,
+                    campo_query.replace("ID_", "").upper(),
+                    campo_query.replace("_", "").upper()
+                ]
+
+                # Verificar se o campo da query corresponde a algum campo do mapeamento
+                campo_encontrado = any(
+                    campo_query.upper() in campo_possivel or 
+                    campo_possivel in campo_query.upper()
+                    for campo_possivel in possiveis_campos if campo_possivel
+                )
+
+                if campo_encontrado:
+                    campos_match.append(campo_query)
+
+            # Se encontrou campos correspondentes, adicionar o item
+            if campos_match:
+                novo_item = item.copy()
+                novo_item["campos_match"] = campos_match
+                resultados.append(novo_item)
+        
+        logger.info(f"Encontrados {len(resultados)} mapeamentos")
+        return resultados
+    
+    def filtrar_mapeamentos(self, mapeamentos_brutos):
+        """
+        Filtra mapeamentos para incluir apenas itens com campos válidos.
+        
+        Args:
+            mapeamentos_brutos: Lista de mapeamentos a serem filtrados
+            
+        Returns:
+            Lista de mapeamentos filtrados
+        """
+        # Definir campos com base no tipo de conversão
+        if self.tipo_conversao == "OC3_PARA_DATAMESH":
+            campos_requeridos = [
+                "tipo", "TABELA OC3 LIGHT", "CAMPO OC3 LIGHT", 
+                "TABELA DATA MESH", "CAMPO DATA MESH FINAL", "TIPO DE DADO"
+            ]
+            campos_saida = [
+                "tipo", "TABELA OC3 LIGHT", "CAMPO OC3 LIGHT", 
+                "TABELA DATA MESH", "CAMPO DATA MESH FINAL", "TIPO DE DADO"
+            ]
+        else:  # SAC_PARA_OC3
+            campos_requeridos = [
+                "tipo", "TABELA SAC", "CAMPO SAC", 
+                "TABELA OC3", "CAMPO OC3", "TIPO DE DADO"
+            ]
+            campos_saida = [
+                "tipo", "TABELA SAC", "CAMPO SAC", 
+                "TABELA OC3", "CAMPO OC3", "TIPO DE DADO"
+            ]
+        
+        resultados_filtrados = []
+        
+        for item in mapeamentos_brutos:
+            # Verificar se todos os campos requeridos existem e não são "nan"
+            if all(item.get(campo) != "nan" and item.get(campo) for campo in campos_requeridos):
+                novo_item = {campo: item.get(campo, "") for campo in campos_saida}
+                # Preservar campos_match se existir
+                if "campos_match" in item:
+                    novo_item["campos_match"] = item["campos_match"]
+                resultados_filtrados.append(novo_item)
+        
+        return resultados_filtrados
+    
+    def agrupar_mapeamentos_para_lambda(self, mapeamentos_selecionados):
+        """
+        Agrupa os mapeamentos no formato adequado para envio à Lambda.
+        
+        Args:
+            mapeamentos_selecionados: Lista de mapeamentos selecionados
+            
+        Returns:
+            Dicionário de mapeamentos agrupados
+        """
+        mapeamentos_agrupados = {}
+        
+        # Verificar se temos mapeamentos válidos
+        if not mapeamentos_selecionados:
+            return mapeamentos_agrupados
+        
+        for item in mapeamentos_selecionados:
+            if not isinstance(item, dict):
+                continue
+            
+            # Definir campos com base no tipo de conversão
+            if self.tipo_conversao == "OC3_PARA_DATAMESH":
+                tabela_original = item.get("TABELA OC3 LIGHT", "")
+                campo_original = item.get("CAMPO OC3 LIGHT", "")
+                tabela_destino = item.get("TABELA DATA MESH", "")
+                campo_destino = item.get("CAMPO DATA MESH FINAL", "")
+                tipo_dado = item.get("TIPO DE DADO", "")
+                categoria = item.get("tipo", "cadastro")
+                sigla = item.get("sigla", tabela_original[:1].lower())
+            else:  # SAC_PARA_OC3
+                tabela_original = item.get("TABELA SAC", "")
+                campo_original = item.get("CAMPO SAC", "")
+                tabela_destino = item.get("TABELA OC3", "")
+                campo_destino = item.get("CAMPO OC3", "")
+                tipo_dado = item.get("TIPO DE DADO", "")
+                categoria = item.get("tipo", "")
+                sigla = item.get("sigla", tabela_original[:1].lower())
+            
+            # Pular se tabela ou campo estiverem vazios
+            if not tabela_original or not campo_original:
+                continue
+                
+            # Inicializar a estrutura de nível tabela se não existir
+            if tabela_original not in mapeamentos_agrupados:
+                mapeamentos_agrupados[tabela_original] = {}
+            
+            # Adicionar mapeamento de campo
+            mapeamentos_agrupados[tabela_original][campo_original] = {
+                "tabela_datamesh": tabela_destino,
+                "campo_datamesh": campo_destino,
+                "tipo_dado": tipo_dado,
+                "tipo": categoria,
+                "sigla": sigla
+            }
+        
+        return mapeamentos_agrupados
+    
+    def verificar_multiplas_possibilidades(self, resultados_filtrados):
+        """
+        Verifica se há múltiplas possibilidades de mapeamento.
+        
+        Args:
+            resultados_filtrados: Lista de mapeamentos encontrados
+            
+        Returns:
+            Tupla (booleano indicando múltiplas possibilidades, 
+                  dicionário de tabelas, 
+                  dicionário de tabelas com múltiplos destinos)
+        """
+        # Agrupar mapeamentos por tabela
+        tabelas_mapeadas = {}
+        
+        for item in resultados_filtrados:
+            # Verificar se item é um dicionário válido
+            if not isinstance(item, dict):
+                continue
+            
+            # Determinar as chaves de tabela baseado no tipo de conversão
+            if self.tipo_conversao == "OC3_PARA_DATAMESH":
+                tabela_origem = item.get("TABELA OC3 LIGHT", "")
+                tabela_destino = item.get("TABELA DATA MESH", "")
+                campo_origem = item.get("CAMPO OC3 LIGHT", "")
+            else:  # SAC_PARA_OC3
+                tabela_origem = item.get("TABELA SAC", "")
+                tabela_destino = item.get("TABELA OC3", "")
+                campo_origem = item.get("CAMPO SAC", "")
+            
+            # Ignorar itens sem tabela
+            if not tabela_origem:
+                continue
+            
+            # Chave combinada para tabela e destino
+            chave_destino = f"{tabela_destino}"
+            
+            # Inicializar entrada para a tabela se não existir
+            if tabela_origem not in tabelas_mapeadas:
+                tabelas_mapeadas[tabela_origem] = {
+                    "campos": set(),
+                    "destinos": set(),
+                    "destinos_info": {},
+                    "total_mapeamentos": 0,
+                    "items": []
+                }
+            
+            # Adicionar campo e destino
+            tabelas_mapeadas[tabela_origem]["campos"].add(campo_origem)
+            tabelas_mapeadas[tabela_origem]["destinos"].add(chave_destino)
+            
+            # Adicionar informações do destino
+            if chave_destino not in tabelas_mapeadas[tabela_origem]["destinos_info"]:
+                tabelas_mapeadas[tabela_origem]["destinos_info"][chave_destino] = {
+                    "nome": tabela_destino,
+                    "campos": set(),
+                    "items": []
+                }
+            
+            tabelas_mapeadas[tabela_origem]["destinos_info"][chave_destino]["campos"].add(campo_origem)
+            tabelas_mapeadas[tabela_origem]["destinos_info"][chave_destino]["items"].append(item)
+            
+            # Incrementar total de mapeamentos
+            tabelas_mapeadas[tabela_origem]["total_mapeamentos"] += 1
+            
+            # Adicionar o item completo
+            tabelas_mapeadas[tabela_origem]["items"].append(item)
+
+        # Se temos pelo menos uma tabela, sempre requer seleção
+        multiplas_possibilidades = len(tabelas_mapeadas) > 0
+        
+        # Além disso, registramos explicitamente quais tabelas têm múltiplos destinos
+        tabelas_multiplos_destinos = {}
+        
+        for tabela, dados in tabelas_mapeadas.items():
+            if len(dados['destinos']) > 1:
+                destinos_list = []
+                for i, destino in enumerate(dados['destinos']):
+                    nome_destino = dados['destinos_info'][destino]['nome']
+                    destinos_list.append((i+1, nome_destino))
+                tabelas_multiplos_destinos[tabela] = destinos_list
+
+        return multiplas_possibilidades, tabelas_mapeadas, tabelas_multiplos_destinos
+
+
+==============================================================================================
+config.py
+
+# config.py
+"""
+Arquivo de configuração central para o aplicativo.
+Aqui são definidas todas as configurações que podem precisar ser ajustadas.
+"""
+
+# Configurações do S3
+S3_CONFIG = {
+    "BUCKET_NAME": "seu-bucket-de-mapeamentos",  # Substitua pelo nome do seu bucket real
+    "REGION_NAME": "us-east-1",  # Região AWS do bucket
+    "PREFIX_OC3_DATAMESH": "mapeamentos-oc3-datamesh/",  # Prefixo para mapeamentos OC3-DataMesh
+    "PREFIX_SAC_OC3": "mapeamentos-sac-oc3/",  # Prefixo para mapeamentos SAC-OC3
+    "USAR_S3": False  # Defina como False para forçar o uso de arquivos locais durante os testes
+}
+
+# Configurações de caminhos locais
+PATH_CONFIG = {
+    "MAPEAMENTOS_BASE": "mapeamentos-de-para",
+    "MAPEAMENTOS_OC3_DATAMESH": "mapeamentos-de-para/mapeamentos-oc3-datamesh",
+    "MAPEAMENTOS_SAC_OC3": "mapeamentos-de-para/mapeamentos-sac-oc3"
+}
+
+# Configurações do Bedrock
+BEDROCK_CONFIG = {
+    "MODEL_ID": "anthropic.claude-3-sonnet-20240229-v1:0",  # ID do modelo Claude no Bedrock
+    "REGION_NAME": "us-east-1",  # Região AWS do Bedrock
+    "MAX_TOKENS_BASE": 500,  # Tokens base para respostas
+    "MAX_TOKENS_MAX": 2500  # Máximo de tokens para respostas
+}
+
+# Interface do usuário
+UI_CONFIG = {
+    "TITULO_APP": "Assistente De Conversão SQL",
+    "TEMA_COR_PRIMARIA": "#ffd966",
+    "TEMA_COR_SECUNDARIA": "#e8f0fe"
+}
+
+
+
+
+##################################################################################################
+
+lambda_function.py
+
+import os
+import sys
+import boto3
+import json
+import time
+
+from src.json_loader import carregar_mapeamentos, buscar_por_termos, filtrar_jsons
+from src.query_processor import processar_query
+from src.aws_client import converter_query_oc3_para_datamesh
+from src.query_validator import validar_query
+from src.sac_oc3_converter import carregar_mapeamentos_sac, converter_query_sac_para_datamesh, processar_query_sac
+
+def lambda_handler(event: dict, _context) -> dict:
+    """
+    Processa a query recebida no evento e retorna o resultado convertido.
+    Oferece dois tipos de conversão:
+    1. OC3 Light para DataMesh
+    2. SAC para OC3 Light (e depois para DataMesh)
+
+    :param event: Evento recebido pela função Lambda, deve conter a chave `query`.
+    :param _context: Contexto da execução da Lambda (não utilizado).
+    :return: Dicionário com o resultado da query convertida ou mensagem de erro.
+    """
+    try:
+        # Perguntar ao usuário qual tipo de conversão deseja fazer PRIMEIRO
+        print("\nSelecione o tipo de conversão:")
+        print("1 - Converter query OC3 Light para DataMesh")
+        print("2 - Converter SAC para OC3 Light")
+        tipo_conversao = input("Digite 1 ou 2: ").strip()
+        
+        if tipo_conversao not in ["1", "2"]:
+            return {"error": "Tipo de conversão inválido. Por favor, selecione 1 ou 2."}
+        
+        # DEPOIS, receber a query do usuário
+        print("\nDigite ou cole sua query SQL (pressione Ctrl+Z e Enter para finalizar):")
+        query = sys.stdin.read()  # ctrl+z para parar a leitura da entrada
+
+        if not query:
+            return {"error": "Nenhuma query informada"}
+
+        # Crie uma sessão boto3 usando as credenciais definidas no ambiente
+        session = boto3.Session(
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            aws_session_token=os.getenv("AWS_SESSION_TOKEN")
+        )
+
+        bedrock_runtime = session.client("bedrock-runtime", region_name="us-east-1")
+        
+        # Definir caminhos para arquivos de mapeamento
+        base_dir = os.path.dirname(__file__)
+        json_folder_oc3 = os.path.join(base_dir, "mapeamentos-de-para")
+        json_folder_sac = os.path.join(base_dir, "mapeamentos-sac")
+
+        # Valide a query
+        validacao_resultado = validar_query(query)
+        if validacao_resultado["status"] != "Sucesso":
+            return {"error": validacao_resultado["mensagem"]}
+
+        print(f"\nQuery recebida: {query}")
+        start_time = time.time()
+        
+        if tipo_conversao == "1":
+            # Fluxo OC3 Light para DataMesh
+            print("\nProcessando conversão OC3 Light para DataMesh...")
+            
+            # Carregar mapeamentos OC3 Light
+            mapeamentos = carregar_mapeamentos(json_folder_oc3)
+            resultados = buscar_por_termos(query, mapeamentos)
+            resultados_filtrados = filtrar_jsons(resultados)
+            
+            if not resultados_filtrados:
+                return {"error": "Nenhuma tabela de referência encontrada na query."}
+            
+            # Verificar se tem múltiplos mapeamentos
+            tem_multiplos_mapeamentos = len(resultados_filtrados) > 1
+            
+            if tem_multiplos_mapeamentos:
+                print("\nForam encontrados múltiplos mapeamentos para esta query.")
+                print("Você quer: 1 - Processar a query diretamente, 2 - Selecionar as tabelas do de-para")
+                escolha = input("Selecione 1 ou 2: ").strip()
+                
+                if escolha == "1":
+                    # Processar diretamente com o primeiro mapeamento
+                    mapeamentos_usuario = [resultados_filtrados[0]]
+                    print("Usando o primeiro mapeamento encontrado.")
+                elif escolha == "2":
+                    # Seleção interativa de mapeamentos
+                    print("\nIniciando seleção interativa de mapeamentos...")
+                    mapeamentos_usuario = processar_query(query, resultados_filtrados)
+                else:
+                    return {"error": "Opção inválida. Por favor, selecione 1 ou 2."}
+            else:
+                # Apenas um mapeamento encontrado, usar diretamente
+                mapeamentos_usuario = [resultados_filtrados[0]]
+                print("Apenas um mapeamento encontrado, processando diretamente.")
+            
+            # Converter a query
+            print("\nEnviando query para conversão...")
+            resultado = converter_query_oc3_para_datamesh(bedrock_runtime, query, mapeamentos_usuario)
+            
+        elif tipo_conversao == "2":
+            # Fluxo SAC para OC3 Light
+            print("\nProcessando conversão SAC para OC3 Light...")
+            
+            # Verificar se contém tbpli_ (indicativo de query SAC)
+            if "tbpli_" not in query:
+                print("Aviso: Esta query não parece ser do tipo SAC (não contém prefixo tbpli_)")
+                confirmar = input("Deseja continuar mesmo assim? (S/N): ").strip().upper()
+                if confirmar != "S":
+                    return {"error": "Operação cancelada pelo usuário."}
+            
+            # Carregar mapeamentos SAC
+            mapeamentos_sac = carregar_mapeamentos_sac(json_folder_sac)
+            
+            if not mapeamentos_sac:
+                return {"error": "Nenhum mapeamento SAC encontrado. Verifique os arquivos de mapeamento."}
+            
+            print(f"Mapeamentos SAC carregados: {len(mapeamentos_sac)} registros")
+            
+            # Analisar a query para verificar múltiplos mapeamentos
+            tabelas_aliases = {}
+            colunas_por_alias = {}
+            tem_multiplos_mapeamentos = False
+            
+            try:
+                from src.sac_oc3_converter import extrair_tabelas_aliases_sac, extrair_colunas_usadas_sac, compactar_mapeamentos_sac
+                
+                # Extrair tabelas e aliases
+                tabelas_aliases = extrair_tabelas_aliases_sac(query)
+                
+                # Extrair colunas
+                colunas_por_alias = extrair_colunas_usadas_sac(query, tabelas_aliases)
+                
+                # Compactar mapeamentos
+                mapeamentos_compactados = compactar_mapeamentos_sac(mapeamentos_sac, tabelas_aliases, colunas_por_alias)
+                
+                # Verificar se tem múltiplas opções de mapeamento
+                for tabela, opcoes in mapeamentos_compactados.items():
+                    if len(opcoes) > 1:
+                        tem_multiplos_mapeamentos = True
+                        break
+            except Exception as e:
+                print(f"Aviso: Erro ao analisar múltiplos mapeamentos: {str(e)}")
+                tem_multiplos_mapeamentos = True  # Assume que há múltiplos para segurança
+            
+            if tem_multiplos_mapeamentos:
+                print("\nForam encontrados múltiplos mapeamentos para esta query.")
+                print("Você quer: 1 - Processar a query diretamente, 2 - Selecionar as tabelas do de-para")
+                escolha = input("Selecione 1 ou 2: ").strip()
+                
+                if escolha == "1":
+                    # Processar diretamente
+                    print("Processando a query diretamente...")
+                    resultado = converter_query_sac_para_datamesh(bedrock_runtime, query, mapeamentos_sac, modo_automatico=True)
+                elif escolha == "2":
+                    # Seleção interativa
+                    print("\nIniciando seleção interativa de mapeamentos...")
+                    mapeamentos_selecionados = processar_query_sac(query, mapeamentos_sac)
+                    print("Enviando query para conversão com mapeamentos selecionados...")
+                    resultado = converter_query_sac_para_datamesh(bedrock_runtime, query, mapeamentos_selecionados, modo_automatico=True)
+                else:
+                    return {"error": "Opção inválida. Por favor, selecione 1 ou 2."}
+            else:
+                # Apenas um mapeamento encontrado, usar diretamente
+                print("Processando a query diretamente...")
+                resultado = converter_query_sac_para_datamesh(bedrock_runtime, query, mapeamentos_sac, modo_automatico=True)
+        
+        end_time = time.time()
+        total_time = end_time - start_time
+        print(f"Tempo total de execução: {total_time:.2f} segundos")
+
+        print("\nQuery convertida:")
+        print(resultado)
+        return resultado
+
+    except Exception as e:
+        return {"error": f"Erro interno ao processar a query: {str(e)}"}
+
+if __name__ == "__main__":
+    query_convertida = lambda_handler(None, None)
+    print(query_convertida)
+
+
+==================================================================
+
+sac_oc3
+
+"""
+Módulo para conversão de queries SAC OC3 para DataMesh.
+Este módulo contém funções para carregar mapeamentos SAC OC3 e
+converter queries SQL do formato SAC para o formato DataMesh.
+"""
+
+import os
+import json
+import logging
+import re
+import time
+from typing import List, Dict, Any
+
+# Configurar logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+def carregar_mapeamentos_sac(pasta_json: str) -> List[Dict[str, Any]]:
+    """
+    Carrega e normaliza mapeamentos SAC OC3 de uma pasta específica.
+    
+    :param pasta_json: Caminho para a pasta com arquivos JSON de mapeamento SAC.
+    :return: Lista de mapeamentos normalizados no formato padrão.
+    """
+    logger.info(f"Carregando mapeamentos SAC OC3 da pasta: {pasta_json}")
+    mapeamentos_normalizados = []
+    
+    # Verificar se a pasta existe
+    if not os.path.isdir(pasta_json):
+        logger.error(f"Pasta de mapeamentos SAC não encontrada: {pasta_json}")
+        return []
+    
+    # Percorrer arquivos na pasta
+    for arquivo in os.listdir(pasta_json):
+        if arquivo.endswith('.json'):
+            caminho_completo = os.path.join(pasta_json, arquivo)
+            
+            try:
+                # Carregar o arquivo JSON
+                with open(caminho_completo, 'r', encoding='utf-8') as f:
+                    dados = json.load(f)
+                
+                # Verificar se segue o formato esperado do SAC OC3
+                if "aba" in dados and "tabelas" in dados:
+                    logger.info(f"Processando arquivo de mapeamento SAC: {arquivo}")
+                    mapeamentos_normalizados.extend(normalizar_mapeamentos_sac(dados))
+                else:
+                    logger.warning(f"Arquivo não segue o formato SAC OC3: {arquivo}")
+            
+            except Exception as e:
+                logger.error(f"Erro ao processar arquivo {arquivo}: {str(e)}")
+    
+    logger.info(f"Total de mapeamentos SAC normalizados: {len(mapeamentos_normalizados)}")
+    return mapeamentos_normalizados
+
+def normalizar_mapeamentos_sac(dados_sac: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Normaliza os dados do formato SAC OC3 para o formato padrão de mapeamento.
+    
+    :param dados_sac: Dicionário com dados no formato SAC OC3.
+    :return: Lista de mapeamentos normalizados.
+    """
+    mapeamentos = []
+    
+    for tabela in dados_sac.get("tabelas", []):
+        tabela_nome = tabela.get("tabela", "")
+        tipo_tabela = tabela.get("tipo", "")
+        
+        # Verificar se é uma tabela válida
+        if not tabela_nome:
+            continue
+        
+        # Determinar o tipo (cadastro ou hub)
+        tipo_normalizado = "cadastro" if tipo_tabela == "conversaoatl" else "hub"
+        
+        # Remover prefixo tbpli_ do nome da tabela
+        tabela_datamesh = tabela_nome.replace("tbpli_", "")
+        
+        # Processar campos da tabela
+        for campo in tabela.get("campos", []):
+            nome_campo = campo.get("campo", "")
+            tipo_campo = campo.get("tipoCampo", "")
+            tamanho = campo.get("tam", "")
+            descricao = campo.get("descrição", "")
+            
+            # Pular índices e campos compostos
+            if "clustered" in nome_campo or "," in nome_campo or not tipo_campo:
+                continue
+            
+            # Normalizar nome de campo para DataMesh
+            nome_campo_datamesh = normalizar_nome_campo(nome_campo)
+            
+            # Mapear tipo de dado
+            tipo_dado_datamesh = mapear_tipo_dado(tipo_campo, tamanho)
+            
+            # Criar mapeamento normalizado
+            mapeamento = {
+                "tipo": tipo_normalizado,
+                "TABELA OC3 LIGHT": tabela_nome,
+                "TABELA DATA MESH": tabela_datamesh,
+                "CAMPO OC3 LIGHT": nome_campo,
+                "CAMPO DATA MESH FINAL": nome_campo_datamesh,
+                "TIPO DE DADO": tipo_dado_datamesh
+            }
+            
+            mapeamentos.append(mapeamento)
+    
+    return mapeamentos
+
+def normalizar_nome_campo(nome_campo: str) -> str:
+    """
+    Normaliza o nome de um campo do formato SAC OC3 para o formato DataMesh.
+    
+    :param nome_campo: Nome do campo no formato SAC OC3.
+    :return: Nome do campo normalizado.
+    """
+    # Remover qualquer indicação de tipo entre parênteses
+    if "(" in nome_campo:
+        nome_campo = nome_campo.split("(")[0].strip()
+    
+    # Mapeamento de prefixos padrão
+    prefixos = {
+        "cd_": "codigo_",
+        "dt_": "data_",
+        "vl_": "valor_",
+        "qt_": "quantidade_",
+        "nr_": "numero_",
+        "ic_": "indicador_",
+        "ds_": "descricao_",
+        "tp_": "tipo_",
+        "id_": "id_"
+    }
+    
+    # Aplicar mapeamento de prefixos
+    for prefixo_original, prefixo_novo in prefixos.items():
+        if nome_campo.startswith(prefixo_original):
+            resto_nome = nome_campo[len(prefixo_original):]
+            
+            # Converter CamelCase para snake_case
+            resultado = prefixo_novo
+            for i, char in enumerate(resto_nome):
+                if char.isupper() and i > 0:
+                    resultado += "_" + char.lower()
+                else:
+                    resultado += char.lower()
+            
+            return resultado
+    
+    # Se não tem prefixo conhecido, apenas converter CamelCase para snake_case
+    resultado = ""
+    for i, char in enumerate(nome_campo):
+        if char.isupper() and i > 0:
+            resultado += "_" + char.lower()
+        else:
+            resultado += char.lower()
+    
+    return resultado
+
+def mapear_tipo_dado(tipo_campo: str, tamanho: str) -> str:
+    """
+    Mapeia um tipo de dado do formato SAC OC3 para o formato DataMesh.
+    
+    :param tipo_campo: Tipo de campo no formato SAC OC3.
+    :param tamanho: Tamanho do campo.
+    :return: Tipo de dado no formato DataMesh.
+    """
+    # Extrair o tipo base sem parênteses
+    tipo_base = tipo_campo.lower()
+    if "(" in tipo_base:
+        tipo_base = tipo_base.split("(")[0].strip()
+    
+    # Mapeamento de tipos básicos
+    mapeamento_tipos = {
+        "cd_sistema": "INT",
+        "tinyint": "TINYINT",
+        "smallint": "SMALLINT",
+        "int": "INT",
+        "bigint": "BIGINT",
+        "decimal": f"DECIMAL({tamanho or '18,2'})",
+        "numeric": f"DECIMAL({tamanho or '18,2'})",
+        "float": "FLOAT",
+        "real": "FLOAT",
+        "money": "DECIMAL(19,4)",
+        "smallmoney": "DECIMAL(10,4)",
+        "char": f"CHAR({tamanho or '1'})",
+        "nchar": f"CHAR({tamanho or '1'})",
+        "varchar": f"VARCHAR({tamanho or '255'})",
+        "nvarchar": f"VARCHAR({tamanho or '255'})",
+        "text": "TEXT",
+        "ntext": "TEXT",
+        "datetime": "DATE",
+        "smalldatetime": "DATE",
+        "date": "DATE",
+        "time": "TIME",
+        "bit": "BOOLEAN",
+        "binary": f"BINARY({tamanho or '50'})",
+        "varbinary": f"VARBINARY({tamanho or '50'})",
+        "image": "BINARY(MAX)",
+        "uniqueidentifier": "VARCHAR(36)"
+    }
+    
+    return mapeamento_tipos.get(tipo_base, f"VARCHAR({tamanho or '255'})")
+
+def extrair_tabelas_aliases_sac(query: str) -> Dict[str, str]:
+    """
+    Extrai tabelas e seus aliases de uma query SAC OC3.
+    
+    :param query: Query SQL no formato SAC OC3.
+    :return: Dicionário com {alias: tabela}.
+    """
+    # Padrão para buscar tabelas com alias
+    padrao = r"(tbpli_\w+)\s+(?:AS\s+)?(\w+)"
+    
+    # Buscar todas as ocorrências
+    matches = re.findall(padrao, query, re.IGNORECASE)
+    
+    # Construir dicionário {alias: tabela}
+    alias_tabela = {}
+    for tabela, alias in matches:
+        alias_tabela[alias] = tabela
+    
+    # Buscar tabelas sem alias (usar a própria tabela como chave)
+    padrao_sem_alias = r"FROM\s+(tbpli_\w+)(?!\s+\w+)"
+    matches_sem_alias = re.findall(padrao_sem_alias, query, re.IGNORECASE)
+    
+    for tabela in matches_sem_alias:
+        alias_tabela[tabela] = tabela
+    
+    return alias_tabela
+
+def extrair_colunas_usadas_sac(query: str, tabelas_aliases: Dict[str, str]) -> Dict[str, set]:
+    """
+    Extrai colunas usadas em uma query SAC OC3.
+    
+    :param query: Query SQL no formato SAC OC3.
+    :param tabelas_aliases: Dicionário com {alias: tabela}.
+    :return: Dicionário com {alias: set(colunas)}.
+    """
+    colunas_por_alias = {}
+    
+    # Inicializar conjuntos para cada alias
+    for alias in tabelas_aliases.keys():
+        colunas_por_alias[alias] = set()
+    
+    # Padrão para buscar colunas com alias (alias.coluna)
+    for alias in tabelas_aliases.keys():
+        padrao = rf"{alias}\.(\w+)"
+        matches = re.findall(padrao, query, re.IGNORECASE)
+        
+        for coluna in matches:
+            colunas_por_alias[alias].add(coluna)
+    
+    # Padrão para colunas sem alias
+    # Isso é mais complexo e pode gerar falsos positivos
+    # Uma solução simples é verificar palavras que começam com prefixos comuns
+    prefixos = ["cd_", "dt_", "vl_", "qt_", "nr_", "ic_", "ds_", "tp_", "id_"]
+    
+    # Extrair todas as palavras da query
+    palavras = re.findall(r"\b(\w+)\b", query)
+    
+    # Buscar palavras que começam com prefixos comuns
+    for palavra in palavras:
+        for prefixo in prefixos:
+            if palavra.lower().startswith(prefixo.lower()):
+                # Adicionar a coluna a uma chave especial "sem_alias"
+                if "sem_alias" not in colunas_por_alias:
+                    colunas_por_alias["sem_alias"] = set()
+                colunas_por_alias["sem_alias"].add(palavra)
+    
+    return colunas_por_alias
+
+def compactar_mapeamentos_sac(mapeamentos: List[Dict[str, Any]], tabelas_aliases: Dict[str, str], 
+                             colunas_por_alias: Dict[str, set]) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """
+    Compacta os mapeamentos SAC OC3 para um formato mais fácil de usar.
+    
+    :param mapeamentos: Lista de mapeamentos normalizados.
+    :param tabelas_aliases: Dicionário com {alias: tabela}.
+    :param colunas_por_alias: Dicionário com {alias: set(colunas)}.
+    :return: Dicionário com mapeamentos compactados.
+    """
+    # Inverter tabelas_aliases para {tabela: alias}
+    tabelas = {}
+    for alias, tabela in tabelas_aliases.items():
+        if tabela not in tabelas:
+            tabelas[tabela] = []
+        tabelas[tabela].append(alias)
+    
+    # Construir mapeamento compactado
+    mapeamento_compactado = {}
+    
+    # Para cada tabela na query
+    for tabela, aliases in tabelas.items():
+        # Inicializar tabela no mapeamento
+        if tabela not in mapeamento_compactado:
+            mapeamento_compactado[tabela] = {}
+        
+        # Buscar mapeamentos para esta tabela
+        for m in mapeamentos:
+            if m["TABELA OC3 LIGHT"] == tabela:
+                tabela_dm = m["TABELA DATA MESH"]
+                
+                # Inicializar tabela DataMesh no mapeamento
+                if tabela_dm not in mapeamento_compactado[tabela]:
+                    mapeamento_compactado[tabela][tabela_dm] = {}
+                
+                # Adicionar colunas mapeadas
+                coluna_oc3 = m["CAMPO OC3 LIGHT"]
+                
+                # Verificar se a coluna é usada na query
+                coluna_usada = False
+                for alias in aliases:
+                    if alias in colunas_por_alias and coluna_oc3 in colunas_por_alias[alias]:
+                        coluna_usada = True
+                        break
+                
+                # Se a coluna estiver na lista "sem_alias", também considerar
+                if "sem_alias" in colunas_por_alias and coluna_oc3 in colunas_por_alias["sem_alias"]:
+                    coluna_usada = True
+                
+                # Adicionar mapeamento se a coluna for usada
+                if coluna_usada:
+                    mapeamento_compactado[tabela][tabela_dm][coluna_oc3] = {
+                        "tabela_data_mesh": tabela_dm,
+                        "campo_data_mesh": m["CAMPO DATA MESH FINAL"],
+                        "tipo_de_dado": m["TIPO DE DADO"],
+                        "tipo": m["tipo"]
+                    }
+    
+    return mapeamento_compactado
+
+def processar_query_sac(query: str, mapeamentos: List[Dict[str, Any]], modo_automatico: bool = False) -> List[Dict[str, Any]]:
+    """
+    Processa uma query SAC OC3 e permite seleção de mapeamentos.
+    
+    :param query: Query SQL no formato SAC OC3.
+    :param mapeamentos: Lista de mapeamentos normalizados.
+    :param modo_automatico: Se True, seleciona automaticamente a primeira opção.
+    :return: Lista de mapeamentos selecionados.
+    """
+    # Extrair tabelas e aliases
+    tabelas_aliases = extrair_tabelas_aliases_sac(query)
+    logger.info(f"Tabelas e aliases extraídos: {tabelas_aliases}")
+    
+    # Extrair colunas usadas
+    colunas_por_alias = extrair_colunas_usadas_sac(query, tabelas_aliases)
+    logger.info(f"Colunas extraídas: {colunas_por_alias}")
+    
+    # Compactar mapeamentos
+    mapeamentos_compactados = compactar_mapeamentos_sac(mapeamentos, tabelas_aliases, colunas_por_alias)
+    
+    # Permitir seleção pelo usuário quando houver múltiplas opções
+    resultado_final = []
+    
+    logger.info("\nSeleção de mapeamentos para a query SAC OC3:")
+    
+    # Para cada tabela na query
+    for tabela_oc3, mapeamentos_tabela in mapeamentos_compactados.items():
+        logger.info(f"\nTabela: {tabela_oc3}")
+        
+        # Se houver mais de uma opção de tabela DataMesh
+        if len(mapeamentos_tabela) > 1 and not modo_automatico:
+            logger.info("Múltiplas opções de mapeamento para esta tabela:")
+            opcoes = list(mapeamentos_tabela.keys())
+            
+            for i, opcao in enumerate(opcoes):
+                logger.info(f"  [{i}] {opcao}")
+            
+            # Solicitar escolha ao usuário
+            try:
+                escolha = input("Selecione o número da opção desejada: ")
+                indice = int(escolha)
+                tabela_dm_escolhida = opcoes[indice]
+            except (ValueError, IndexError, EOFError):
+                logger.warning("Opção inválida ou entrada não disponível, usando a primeira opção.")
+                tabela_dm_escolhida = opcoes[0]
+        else:
+            # Verificar se existem mapeamentos disponíveis para esta tabela
+            if not mapeamentos_tabela:
+                logger.warning(f"AVISO: Nenhum mapeamento encontrado para a tabela {tabela_oc3}. Pulando esta tabela.")
+                continue  # Pula para a próxima tabela
+            tabela_dm_escolhida = list(mapeamentos_tabela.keys())[0]
+        
+        logger.info(f"Tabela DataMesh selecionada: {tabela_dm_escolhida}")
+        
+        # Para cada campo mapeado nesta tabela
+        for campo_oc3, info_campo in mapeamentos_tabela[tabela_dm_escolhida].items():
+            # Adicionar ao resultado final
+            mapeamento = {
+                "tipo": info_campo["tipo"],
+                "TABELA OC3 LIGHT": tabela_oc3,
+                "TABELA DATA MESH": tabela_dm_escolhida,
+                "CAMPO OC3 LIGHT": campo_oc3,
+                "CAMPO DATA MESH FINAL": info_campo["campo_data_mesh"],
+                "TIPO DE DADO": info_campo["tipo_de_dado"]
+            }
+            resultado_final.append(mapeamento)
+    
+    logger.info(f"\nTotal de mapeamentos selecionados: {len(resultado_final)}")
+    return resultado_final
+
+
+def converter_query_sac_para_datamesh(bedrock_runtime, query: str, mapeamentos: List[Dict[str, Any]], modo_automatico: bool = False) -> str:
+    """
+    Converte uma query SQL do formato SAC OC3 para o formato DataMesh usando Claude.
+    
+    :param bedrock_runtime: Cliente do AWS Bedrock para chamadas ao Claude.
+    :param query: Query SQL no formato SAC OC3.
+    :param mapeamentos: Lista de mapeamentos normalizados.
+    :param modo_automatico: Se True, seleciona automaticamente a primeira opção de mapeamento.
+    :return: Query SQL convertida para o formato DataMesh.
+    """
+    try:
+        # Processar a query para seleção de mapeamentos
+        mapeamentos_selecionados = processar_query_sac(query, mapeamentos, modo_automatico)
+        
+        # Construir instruções específicas para SAC OC3
+        instrucoes = """
+        Você é um assistente especializado em conversão de queries SQL do formato SAC OC3 para o formato DataMesh.
+        
+        INSTRUÇÕES ESPECÍFICAS PARA CONVERSÃO DE SAC OC3:
+        
+        1. Tabelas com prefixo 'tbpli_' no SAC OC3 devem ser convertidas para o formato DataMesh:
+           - Para tabelas do tipo 'cadastro', adicione o prefixo 'spec_'
+           - Para tabelas do tipo 'hub', adicione o prefixo 'hub_'
+           - Remova o prefixo 'tbpli_' original
+        
+        2. Nomes de campos seguem estas regras de conversão:
+           - 'cd_' se torna 'codigo_'
+           - 'dt_' se torna 'data_'
+           - 'vl_' se torna 'valor_'
+           - 'qt_' se torna 'quantidade_'
+           - 'ic_' se torna 'indicador_'
+           - 'ds_' se torna 'descricao_'
+           - 'tp_' se torna 'tipo_'
+           - 'nr_' se torna 'numero_'
+           - Formato CamelCase se torna snake_case (ex: NomeCliente -> nome_cliente)
+        
+        3. Campos de data (dt_) devem usar CAST(campo AS DATE)
+        
+        4. Utilize o mapeamento exato fornecido para cada tabela e campo
+        
+        5. Retorne APENAS a query SQL convertida, sem explicações
+        
+        6. Mantenha a lógica da query original, incluindo all joins, where clauses, etc.
+        
+        7. Mantenha aliases de tabela e de campo originais
+        """
+        
+        # Calcular tokens baseado no tamanho da query e mapeamentos
+        max_tokens = min(2500, 500 + len(query) // 2 + len(mapeamentos_selecionados) * 10)
+        
+        payload = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"{instrucoes}\n\nQuery original (SAC OC3): {query}\n\nJSON Mapeamentos (DE-PARA): {json.dumps(mapeamentos_selecionados)}"
+                }
+            ],
+            "max_tokens": max_tokens
+        }
+        
+        # EXIBIR PAYLOAD EM VEZ DE CHAMAR BEDROCK
+        print("\n" + "=" * 80)
+        print("PAYLOAD QUE SERIA ENVIADO AO BEDROCK:")
+        print("=" * 80)
+        print(json.dumps(payload, indent=2))
+        print("=" * 80)
+        
+        # Retorna uma resposta simulada
+        return """SELECT
+    f.codigo_sistema,
+    CAST(f.data_feriado AS DATE),
+    f.descricao_feriado,
+    f.tipo_feriado,
+    f.id_local,
+    c.codigo_classificacao,
+    c.descricao_classificacao,
+    c.indicador_vinculo
+FROM
+    spec_Feriado f
+JOIN
+    spec_classificacaoFundo c ON f.codigo_sistema = c.codigo_sistema
+LEFT JOIN
+    spec_FundoParametro p ON p.codigo_sistema = c.codigo_sistema
+WHERE
+    f.data_feriado BETWEEN '2023-01-01' AND '2023-12-31'
+    AND f.tipo_feriado = 'N'
+    AND c.indicador_vinculo = 'S'
+GROUP BY
+    f.codigo_sistema,
+    f.data_feriado,
+    f.descricao_feriado,
+    f.tipo_feriado,
+    f.id_local,
+    c.codigo_classificacao,
+    c.descricao_classificacao,
+    c.indicador_vinculo
+ORDER BY
+    f.data_feriado, c.codigo_classificacao"""
+    
+    except Exception as e:
+        logger.error(f"Erro ao converter query SAC OC3: {str(e)}", exc_info=True)
+        return f"Erro ao processar a query: {str(e)}"
+# Para testes e debug
+if __name__ == "__main__":
+    # Exemplo de uso
+    pasta_mapeamentos = "./mapeamentos-sac"
+    mapeamentos = carregar_mapeamentos_sac(pasta_mapeamentos)
+    
+    # Exibir alguns exemplos para verificação
+    for i, m in enumerate(mapeamentos[:5]):
+        print(f"Mapeamento {i+1}:")
+        print(f"  Tabela OC3: {m['TABELA OC3 LIGHT']}")
+        print(f"  Tabela DM: {m['TABELA DATA MESH']}")
+        print(f"  Campo OC3: {m['CAMPO OC3 LIGHT']}")
+        print(f"  Campo DM: {m['CAMPO DATA MESH FINAL']}")
+        print(f"  Tipo: {m['TIPO DE DADO']}")
+        print()
+
+
+
