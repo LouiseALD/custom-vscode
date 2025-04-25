@@ -1,1 +1,74 @@
 
+import os
+import json
+import subprocess
+import platform
+from pathlib import Path
+
+# Lista de extensões que serão instaladas
+extensions = [
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint",
+    "eamodio.gitlens",
+    "pkief.material-icon-theme",
+    "ms-python.python",
+    "ms-toolsai.jupyter",
+    "ritwickdey.LiveServer"
+]
+
+# Função para instalar extensões
+def install_extensions():
+    print("🔧 Instalando extensões...")
+    for ext in extensions:
+        try:
+            subprocess.run(["code", "--install-extension", ext, "--force"], check=True)
+            print(f"✅ {ext} instalada com sucesso.")
+        except subprocess.CalledProcessError:
+            print(f"❌ Falha ao instalar {ext}.")
+
+# Função para encontrar o caminho do settings.json
+def get_settings_path():
+    system = platform.system()
+    if system == "Windows":
+        base = os.getenv("APPDATA")
+        return Path(base) / "Code" / "User" / "settings.json"
+    elif system == "Darwin":  # macOS
+        return Path.home() / "Library" / "Application Support" / "Code" / "User" / "settings.json"
+    else:  # Linux
+        return Path.home() / ".config" / "Code" / "User" / "settings.json"
+
+# Função para atualizar settings.json
+def update_settings():
+    settings_path = get_settings_path()
+    settings = {}
+
+    if settings_path.exists():
+        with open(settings_path, "r", encoding="utf-8") as f:
+            try:
+                settings = json.load(f)
+            except json.JSONDecodeError:
+                print("⚠️ Arquivo settings.json está corrompido ou vazio. Um novo será criado.")
+
+    new_settings = {
+        "editor.fontSize": 14,
+        "editor.tabSize": 2,
+        "editor.formatOnSave": True,
+        "workbench.iconTheme": "material-icon-theme",
+        "workbench.colorTheme": "Default Dark+",
+        "files.autoSave": "afterDelay",
+        "editor.minimap.enabled": True,
+        "terminal.integrated.fontSize": 13
+    }
+
+    settings.update(new_settings)
+
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+        print(f"✅ settings.json atualizado com sucesso em {settings_path}")
+
+# Execução
+if __name__ == "__main__":
+    print("🎨 Iniciando personalização do VSCode...")
+    install_extensions()
+    update_settings()
+    print("✨ Tudo pronto!")
